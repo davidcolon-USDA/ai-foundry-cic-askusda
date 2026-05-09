@@ -14,6 +14,10 @@ permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: askusda-backend-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   deploy-app:
     runs-on: ubuntu-latest

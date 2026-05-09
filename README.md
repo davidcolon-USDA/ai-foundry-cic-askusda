@@ -87,11 +87,13 @@ This workspace uses two main GitHub Actions workflows:
    - Creates or discovers the Amplify app and branch.
    - Persists the Amplify App ID as a repository variable for use by the app workflow.
    - Authenticates to AWS via OIDC (no static secrets required).
+      - Shares a deploy concurrency group with the app workflow so backend stack updates are serialized.
 
 2. **Application Deployment (`app-deploy.yml`)**
    - Deploys backend Lambda code and builds the frontend.
    - Deploys the frontend to AWS Amplify using the App ID from the infra workflow.
    - Fails fast if the Amplify App ID is not available.
+      - Shares a deploy concurrency group with the infra workflow to avoid CloudFormation `UPDATE_IN_PROGRESS` collisions.
 
 3. **Initial Crawl (`initial-crawl.yml`)**
       - Manual operator workflow for first-time or ad hoc crawl runs.
