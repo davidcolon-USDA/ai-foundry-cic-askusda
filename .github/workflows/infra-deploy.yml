@@ -47,6 +47,23 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # Dev-only: keep CDK asset ECR repository mutable so repeated infra deploys
+      # can overwrite tags during iteration. Do not use mutable tags in production.
+      - name: Set CDK asset ECR repository tag mutability (dev only)
+        run: |
+          ACCOUNT_ID="${CDK_DEFAULT_ACCOUNT:-$(aws sts get-caller-identity --query Account --output text)}"
+          ASSET_REPO="cdk-hnb659fds-container-assets-${ACCOUNT_ID}-${AWS_REGION}"
+
+          if aws ecr describe-repositories --repository-names "${ASSET_REPO}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+            aws ecr put-image-tag-mutability \
+              --repository-name "${ASSET_REPO}" \
+              --image-tag-mutability MUTABLE \
+              --region "${AWS_REGION}" >/dev/null
+            echo "Set ${ASSET_REPO} to MUTABLE"
+          else
+            echo "CDK asset repository ${ASSET_REPO} does not exist yet; it will be created during bootstrap/deploy."
+          fi
+
       - name: Resolve or create Amplify app and branch
         id: amplify
         run: |
