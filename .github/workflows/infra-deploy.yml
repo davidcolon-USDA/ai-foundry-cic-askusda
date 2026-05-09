@@ -31,6 +31,8 @@ jobs:
       AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
       AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
       DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
+      NIGHTLY_DELTA_CRAWL_ENABLED: ${{ vars.NIGHTLY_DELTA_CRAWL_ENABLED }}
+      NIGHTLY_DELTA_CRAWL_TIME: ${{ vars.NIGHTLY_DELTA_CRAWL_TIME }}
 
     steps:
       - name: Checkout
@@ -159,6 +161,12 @@ jobs:
           if [ -n "${CRAWLER_BUCKET_NAME}" ]; then
             CONTEXT_ARGS="${CONTEXT_ARGS} --context crawlerBucketName=${CRAWLER_BUCKET_NAME}"
           fi
+          if [ -n "${NIGHTLY_DELTA_CRAWL_ENABLED}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context nightlyDeltaCrawlEnabled=${NIGHTLY_DELTA_CRAWL_ENABLED}"
+          fi
+          if [ -n "${NIGHTLY_DELTA_CRAWL_TIME}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context nightlyDeltaCrawlTime=${NIGHTLY_DELTA_CRAWL_TIME}"
+          fi
           cdk bootstrap --require-approval never ${CONTEXT_ARGS}
 
       - name: Deploy crawler and backend stacks
@@ -171,5 +179,11 @@ jobs:
           fi
           if [ -n "${CRAWLER_BUCKET_NAME}" ]; then
             CONTEXT_ARGS="${CONTEXT_ARGS} --context crawlerBucketName=${CRAWLER_BUCKET_NAME}"
+          fi
+          if [ -n "${NIGHTLY_DELTA_CRAWL_ENABLED}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context nightlyDeltaCrawlEnabled=${NIGHTLY_DELTA_CRAWL_ENABLED}"
+          fi
+          if [ -n "${NIGHTLY_DELTA_CRAWL_TIME}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context nightlyDeltaCrawlTime=${NIGHTLY_DELTA_CRAWL_TIME}"
           fi
           cdk deploy AskUSDA-Crawler AskUSDA-Backend --require-approval never ${CONTEXT_ARGS}

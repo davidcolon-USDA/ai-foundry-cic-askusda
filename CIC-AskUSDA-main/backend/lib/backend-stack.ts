@@ -9,6 +9,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import { CrawlerStack } from './crawler-stack';
 
 export interface USDAChatbotStackProps extends cdk.StackProps {
@@ -16,6 +17,14 @@ export interface USDAChatbotStackProps extends cdk.StackProps {
    * Reference to the CrawlerStack to get ECS infrastructure values
    */
   crawlerStack: CrawlerStack;
+  /**
+   * Enables the nightly delta crawl scheduler.
+   */
+  nightlyDeltaCrawlEnabled?: boolean;
+  /**
+   * Nightly crawl time in HH:MM, interpreted in America/Chicago.
+   */
+  nightlyDeltaCrawlTime?: string;
 }
 
 export class USDAChatbotStack extends cdk.Stack {
@@ -272,6 +281,64 @@ export class USDAChatbotStack extends cdk.Stack {
         CRAWLER_REGION: 'us-west-2',
       },
     });
+
+    // ==================== Nightly delta crawl scheduler ====================
+    // Modification of the existing crawl/sync flow:
+    // - The scheduler is operator-controlled via CDK context
+    // - nightlyDeltaCrawlEnabled: boolean toggle (default: true)
+    // - nightlyDeltaCrawlTime: HH:MM in America/Chicago (default: 01:00)
+    // - It only dispatches a crawl when crawled artifacts already exist in S3.
+    const nightlyDeltaCrawlEnabled = props.nightlyDeltaCrawlEnabled ?? true;
+    const nightlyDeltaCrawlTime = props.nightlyDeltaCrawlTime ?? '01:00';
+
+    if (nightlyDeltaCrawlEnabled) {
+      const timeMatch = /^(\d{1,2}):(\d{2})$/.exec(nightlyDeltaCrawlTime.trim());
+      if (!timeMatch) {
+        throw new Error(`Invalid nightlyDeltaCrawlTime '${nightlyDeltaCrawlTime}'. Expected HH:MM.`);
+      }
+
+      const hour = Number(timeMatch[1]);
+      const minute = Number(timeMatch[2]);
+      if (Number.isNaN(hour) || Number.isNaN(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        throw new Error(`Invalid nightlyDeltaCrawlTime '${nightlyDeltaCrawlTime}'. Expected HH:MM.`);
+      }
+
+      const nightlyDeltaCrawlGate = new lambda.Function(this, 'NightlyDeltaCrawlGate', {
+        functionName: 'AskUSDA-NightlyDeltaCrawlGate',
+        runtime: lambda.Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: lambda.Code.fromAsset('lambda/nightly-crawl-gate'),
+        timeout: cdk.Duration.minutes(1),
+        memorySize: 256,
+        environment: {
+          CRAWLER_BUCKET: crawlerBucketName,
+          CRAWL_PREFIX: 'jobs/',
+          KBSYNC_FUNCTION_NAME: kbSyncHandler.functionName,
+        },
+      });
+
+      crawlerBucket.grantRead(nightlyDeltaCrawlGate);
+      kbSyncHandler.grantInvoke(nightlyDeltaCrawlGate);
+
+      const schedulerInvokeRole = new iam.Role(this, 'NightlyDeltaCrawlSchedulerRole', {
+        assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
+        description: 'Allows EventBridge Scheduler to invoke the nightly crawl gate Lambda',
+      });
+      nightlyDeltaCrawlGate.grantInvoke(schedulerInvokeRole);
+
+      new scheduler.CfnSchedule(this, 'NightlyDeltaCrawlSchedule', {
+        description: 'Nightly delta crawl gate for AskUSDA knowledge refresh',
+        flexibleTimeWindow: { mode: 'OFF' },
+        scheduleExpression: `cron(${minute} ${hour} * * ? *)`,
+        scheduleExpressionTimezone: 'America/Chicago',
+        state: 'ENABLED',
+        target: {
+          arn: nightlyDeltaCrawlGate.functionArn,
+          roleArn: schedulerInvokeRole.roleArn,
+          input: JSON.stringify({ action: 'nightly_delta_crawl' }),
+        },
+      });
+    }
 
     // ==================== IAM Role for WebSocket Lambda ====================
     const lambdaRole = new iam.Role(this, 'WebSocketLambdaRole', {

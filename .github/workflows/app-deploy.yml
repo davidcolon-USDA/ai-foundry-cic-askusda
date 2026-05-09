@@ -25,6 +25,8 @@ jobs:
       AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
       AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
       DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
+      NIGHTLY_DELTA_CRAWL_ENABLED: ${{ vars.NIGHTLY_DELTA_CRAWL_ENABLED }}
+      NIGHTLY_DELTA_CRAWL_TIME: ${{ vars.NIGHTLY_DELTA_CRAWL_TIME }}
 
     steps:
       - name: Checkout
@@ -63,6 +65,7 @@ jobs:
           cd CIC-AskUSDA-main/backend/lambda/websocket-handler && npm ci
           cd ../kb-sync-handler && npm ci
           cd ../admin-api && npm ci
+          cd ../nightly-crawl-gate && npm ci
 
       - name: Install CDK CLI
         run: npm install -g aws-cdk
@@ -74,6 +77,12 @@ jobs:
           CONTEXT_ARGS=""
           if [ -n "${AMPLIFY_APP_ID}" ]; then
             CONTEXT_ARGS="${CONTEXT_ARGS} --context amplifyAppId=${AMPLIFY_APP_ID}"
+          fi
+          if [ -n "${NIGHTLY_DELTA_CRAWL_ENABLED}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context nightlyDeltaCrawlEnabled=${NIGHTLY_DELTA_CRAWL_ENABLED}"
+          fi
+          if [ -n "${NIGHTLY_DELTA_CRAWL_TIME}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context nightlyDeltaCrawlTime=${NIGHTLY_DELTA_CRAWL_TIME}"
           fi
           cdk deploy "${TARGET_STACK}" --require-approval never ${CONTEXT_ARGS}
 

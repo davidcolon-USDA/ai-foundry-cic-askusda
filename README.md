@@ -93,7 +93,17 @@ This workspace uses two main GitHub Actions workflows:
    - Deploys the frontend to AWS Amplify using the App ID from the infra workflow.
    - Fails fast if the Amplify App ID is not available.
 
-Both workflows are triggered by pushes to the repository and are designed for a two-phase deployment pattern (infra first, then app).
+3. **Initial Crawl (`initial-crawl.yml`)**
+      - Manual operator workflow for first-time or ad hoc crawl runs.
+      - Reads `CIC-AskUSDA-main/backend/crawler/urls.yaml` and invokes `AskUSDA-KBSyncHandler`.
+      - Supports `crawl_batch`, `crawl`, `prepare`, and `ingest` modes.
+
+4. **Nightly Delta Crawl Scheduler**
+      - EventBridge Scheduler-backed nightly trigger for delta refreshes.
+      - Defaults to 1:00 AM America/Chicago unless overridden by repo variables.
+      - Skips execution when no crawled output exists yet.
+
+The deploy workflows are triggered by pushes to the repository and are designed for a two-phase deployment pattern (infra first, then app). The crawler refresh workflows are operator-driven or scheduled separately so first-time and delta ingestion can be controlled independently.
 
 ## bootstrap.sh
 

@@ -12,12 +12,14 @@
 - Code is readable, with clear separation of concerns (e.g., CORS handling, DynamoDB access, Bedrock integration).
 - Async/await is used properly, and error handling is present but could be more granular in some places.
 - Comments and helper functions improve clarity.
+- Added a nightly crawl gate Lambda to keep delta refreshes from running when no crawl output exists yet.
 - **Rating:** 8/10
 
 ## backend/lib (AWS CDK Infrastructure)
 - **backend-stack.ts, crawler-stack.ts**: Well-structured, leveraging CDK best practices (constructs, outputs, dependency management).
 - Uses TypeScript types and interfaces for stack props.
 - Code is modular and readable, with clear separation between crawler and backend stacks.
+- Added a nightly delta crawl scheduler with enable/time controls and S3-backed gating.
 - **Rating:** 9/10
 
 ## frontend/app/components (React/Next.js)

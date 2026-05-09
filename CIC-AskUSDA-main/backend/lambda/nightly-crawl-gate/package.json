@@ -1,0 +1,10 @@
+{
+  "name": "nightly-crawl-gate",
+  "version": "1.0.0",
+  "description": "Lambda gate that checks for crawled data before starting the nightly delta crawl",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-lambda": "^3.0.0",
+    "@aws-sdk/client-s3": "^3.0.0"
+  }
+}

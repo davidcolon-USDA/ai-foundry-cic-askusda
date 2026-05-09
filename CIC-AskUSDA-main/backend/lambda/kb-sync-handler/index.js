@@ -94,7 +94,7 @@ function dedupKey(sourceUrl, filename) {
  */
 async function prepareIngestion() {
   console.log('[PREPARE] Starting ingestion preparation for bucket:', BUCKET);
-  const stats = { copied: 0, metadataWritten: 0, skipped: 0, duplicates: 0, oversized: 0, errors: 0 };
+  const stats = { copied: 0, metadataWritten: 0, skipped: 0, duplicates: 0, oversized: 0, errors: 0, jobCount: 0 };
   const seen = new Set(); // dedup tracker
 
   // List all job prefixes
@@ -102,6 +102,7 @@ async function prepareIngestion() {
     Bucket: BUCKET, Prefix: 'jobs/', Delimiter: '/',
   }));
   const jobPrefixes = (jobsResp.CommonPrefixes || []).map(p => p.Prefix);
+  stats.jobCount = jobPrefixes.length;
   console.log('[PREPARE] Found', jobPrefixes.length, 'job directories');
 
   for (const jobPrefix of jobPrefixes) {
@@ -378,6 +379,15 @@ exports.handler = async (event) => {
   // Default parsing has no per-job file limit, so all files are processed in one go.
   const prepResult = await prepareIngestion();
   console.log('[INGEST] Preparation result:', prepResult);
+
+  if (!prepResult.jobCount) {
+    console.log('[INGEST] No crawled data found under jobs/; skipping Bedrock ingestion.');
+    return {
+      status: 'no_op',
+      reason: 'no crawled data found',
+      preparation: prepResult,
+    };
+  }
 
   const knowledgeBaseId = process.env.KNOWLEDGE_BASE_ID;
   const dataSourceId = process.env.DATA_SOURCE_ID_V1;

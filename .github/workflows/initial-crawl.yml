@@ -1,0 +1,139 @@
+name: Initial Crawl
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Crawler action to invoke"
+        required: true
+        default: "crawl_batch"
+        type: choice
+        options:
+          - crawl_batch
+          - crawl
+          - prepare
+          - ingest
+      job_filter:
+        description: "Optional comma-separated list of job names to crawl (crawl_batch only)"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Print the payload and skip invocation"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  run-initial-crawl:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}
+      CRAWLER_BUCKET_NAME: ${{ vars.CRAWLER_BUCKET_NAME }}
+      CRAWLER_BUCKET: ${{ vars.CRAWLER_BUCKET_NAME }}
+      AWS_ACCOUNT_ID: ${{ vars.CDK_DEFAULT_ACCOUNT }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Build crawl payload
+        id: payload
+        shell: bash
+        run: |
+          python <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import yaml
+
+          action = os.environ.get("INPUT_ACTION", "crawl_batch")
+          job_filter = [j.strip() for j in os.environ.get("INPUT_JOB_FILTER", "").split(",") if j.strip()]
+          dry_run = os.environ.get("INPUT_DRY_RUN", "false").lower() == "true"
+
+          urls_path = Path("CIC-AskUSDA-main/backend/crawler/urls.yaml")
+          data = yaml.safe_load(urls_path.read_text(encoding="utf-8")) or {}
+          jobs = list(data.get("crawl_jobs", []))
+
+          if job_filter:
+            jobs = [job for job in jobs if job.get("name") in job_filter]
+
+          if action == "crawl_batch":
+            payload = {"action": "crawl_batch", "jobs": jobs}
+          elif action == "crawl":
+            if not jobs:
+              raise SystemExit("No jobs selected. Provide job_filter when using crawl action.")
+            first = jobs[0]
+            payload = {
+                "action": "crawl",
+                "url": first["source_url"],
+                "maxPages": str(first.get("max_pages", 99999)),
+                "scopeType": first.get("scope_type", "path"),
+                "jobId": first.get("name", ""),
+            }
+          elif action == "prepare":
+            payload = {"action": "prepare"}
+          elif action == "ingest":
+            payload = {"action": "ingest"}
+          else:
+            raise SystemExit(f"Unsupported action: {action}")
+
+          print(json.dumps({
+              "action": action,
+              "dry_run": dry_run,
+              "job_count": len(jobs),
+              "payload": payload,
+          }, indent=2))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"payload<<EOF\n{json.dumps(payload)}\nEOF\n")
+              fh.write(f"job_count={len(jobs)}\n")
+              fh.write(f"dry_run={'true' if dry_run else 'false'}\n")
+          PY
+        env:
+          INPUT_ACTION: ${{ inputs.action }}
+          INPUT_JOB_FILTER: ${{ inputs.job_filter }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+
+      - name: Show payload summary
+        run: |
+          echo "Selected jobs: ${{ steps.payload.outputs.job_count }}"
+          echo "Dry run: ${{ steps.payload.outputs.dry_run }}"
+          echo "Payload: ${{ steps.payload.outputs.payload }}"
+
+      - name: Invoke KBSyncHandler
+        if: ${{ steps.payload.outputs.dry_run != 'true' }}
+        run: |
+          aws lambda invoke \
+            --function-name AskUSDA-KBSyncHandler \
+            --payload '${{ steps.payload.outputs.payload }}' \
+            --cli-binary-format raw-in-base64-out \
+            --region "${AWS_REGION}" \
+            response.json
+          echo "Invocation response:"
+          cat response.json
+
+      - name: Dry-run complete
+        if: ${{ steps.payload.outputs.dry_run == 'true' }}
+        run: echo "Dry run requested; no Lambda invocation performed."

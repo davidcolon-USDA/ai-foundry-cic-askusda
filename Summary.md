@@ -66,8 +66,14 @@ The AskUSDA application employs a robust CI/CD pipeline to automate deployment a
 4. **GitHub Integration:**
    - The pipeline integrates with GitHub as the source repository.
    - CodeBuild uses a Personal Access Token (PAT) for authentication to clone the repository and fetch updates.
+   - GitHub Actions now also covers the deploy path, initial crawl workflow, smoke workflow, and nightly delta crawl scheduler.
 
-5. **Monitoring and Logs:**
+5. **Crawler Refresh Controls:**
+   - First-time crawl runs are triggered manually through the `initial-crawl.yml` workflow.
+   - Nightly delta refreshes are scheduled through EventBridge Scheduler and can be enabled or disabled through repo variables.
+   - The nightly run is gated so it only proceeds when crawl artifacts already exist.
+
+6. **Monitoring and Logs:**
    - Build logs are streamed to CloudWatch Logs for real-time monitoring.
    - Deployment statuses and outputs are tracked in the AWS Management Console.
 

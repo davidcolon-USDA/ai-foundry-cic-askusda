@@ -19,9 +19,13 @@ This table summarizes the main tunable parameters for the AskUSDA system, where 
 |                     | DOC_SCOPE             | Env var or urls.yaml                | Doc download scope |
 |                     | USE_BROWSER           | Env var or urls.yaml                | Browser mode (auto/on/off) |
 |                     | MAX_CONCURRENT        | Env var or urls.yaml                | Parallel requests |
+|                     | nightlyDeltaCrawlEnabled | Repo variable / CDK context       | Enable or disable the nightly delta crawl scheduler |
+|                     | nightlyDeltaCrawlTime  | Repo variable / CDK context        | Nightly crawl time in HH:MM, America/Chicago (default 01:00) |
 | **Backend Lambda**  | Table names, IDs      | backend/lib/backend-stack.ts        | Passed as env vars |
 |                     | Model IDs, region     | backend/lib/backend-stack.ts        | Passed as env vars |
 | **Crawler Jobs**    | Crawl jobs            | backend/crawler/urls.yaml           | Batch crawl definitions |
+| **Workflows**       | initial-crawl.yml      | .github/workflows/initial-crawl.yml | Manual first-time/ad hoc crawl trigger |
+|                     | nightly delta crawl    | backend/lib/backend-stack.ts, repo variables | Scheduled delta crawl that skips when no crawled data exists |
 
 ## Detailed Parameter Descriptions
 
@@ -40,11 +44,17 @@ This table summarizes the main tunable parameters for the AskUSDA system, where 
 - **Lambda memorySize**: Configures the memory allocated to Lambda functions. Example: 1024 MB for KBSyncHandler.
 - **Lambda timeout**: Maximum execution time for Lambda functions. Example: 15 minutes for KBSyncHandler.
 - **Environment Variables**: Passed to Lambda functions, such as KNOWLEDGE_BASE_ID, DATA_SOURCE_ID_V1, and CRAWLER_BUCKET.
+- **Nightly crawl controls**: Set `nightlyDeltaCrawlEnabled` and `nightlyDeltaCrawlTime` through repo variables or CDK context to control the nightly delta scheduler.
 
 ### crawler-stack.ts (ECS Task Configuration)
 - **memoryLimitMiB**: Memory allocated to the ECS Fargate task. Example: 4096 MB.
 - **cpu**: CPU units allocated to the ECS Fargate task. Example: 2048.
 - **Environment Variables**: Passed to the ECS container, such as USE_S3 and S3_BUCKET.
+
+### Workflow Controls
+- **Initial crawl workflow**: Use `.github/workflows/initial-crawl.yml` to run the first crawl or an operator-led recrawl from `urls.yaml`.
+- **Nightly delta crawl**: Uses EventBridge Scheduler with a default run time of 1:00 AM America/Chicago and a boolean enable flag.
+- **Delta gate behavior**: The nightly run only proceeds when crawl artifacts already exist under the crawler output prefix.
 
 Refer to the respective files for additional inline comments and examples.
 
