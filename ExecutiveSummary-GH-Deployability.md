@@ -21,6 +21,7 @@ The goal was to make the original codebase reliably deployable through GitHub Ac
 5. Amplify app resolution and deployment flow were stabilized through explicit app-id discovery/fallback handling and branch-aware deployment logic.
 6. A manual initial-crawl GitHub workflow was added for first-time or ad hoc knowledge-base population.
 7. A nightly delta crawl scheduler was added and gated so it only fires when prior crawled content exists.
+8. Crawler launch region alignment was fixed so KBSync ECS launches use the deployed crawler region, resolving `Invalid Region in ARN` failures.
 
 ## CI/CD Augmentations Added
 1. Bootstrap automation:

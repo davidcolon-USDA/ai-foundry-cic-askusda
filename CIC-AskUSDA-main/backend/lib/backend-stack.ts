@@ -278,7 +278,8 @@ export class USDAChatbotStack extends cdk.Stack {
         CRAWLER_CONTAINER_NAME: crawlerContainerName,
         CRAWLER_SUBNETS: crawlerSubnetIds,
         CRAWLER_SG_ID: crawlerSecurityGroupId,
-        CRAWLER_REGION: 'us-west-2',
+        // Match the Lambda client region to the deployed crawler stack region.
+        CRAWLER_REGION: cdk.Aws.REGION,
       },
     });
 

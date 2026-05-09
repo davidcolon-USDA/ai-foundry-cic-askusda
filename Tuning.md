@@ -23,6 +23,7 @@ This table summarizes the main tunable parameters for the AskUSDA system, where 
 |                     | nightlyDeltaCrawlTime  | Repo variable / CDK context        | Nightly crawl time in HH:MM, America/Chicago (default 01:00) |
 | **Backend Lambda**  | Table names, IDs      | backend/lib/backend-stack.ts        | Passed as env vars |
 |                     | Model IDs, region     | backend/lib/backend-stack.ts        | Passed as env vars |
+|                     | CRAWLER_REGION        | backend/lib/backend-stack.ts        | Must match crawler stack region for ECS/S3 client calls |
 | **Crawler Jobs**    | Crawl jobs            | backend/crawler/urls.yaml           | Batch crawl definitions |
 | **Workflows**       | initial-crawl.yml      | .github/workflows/initial-crawl.yml | Manual first-time/ad hoc crawl trigger |
 |                     | wait_for_completion    | initial-crawl workflow input         | Wait for ECS crawl tasks and fail workflow on task errors |
@@ -56,6 +57,7 @@ This table summarizes the main tunable parameters for the AskUSDA system, where 
 - **Lambda memorySize**: Configures the memory allocated to Lambda functions. Example: 1024 MB for KBSyncHandler.
 - **Lambda timeout**: Maximum execution time for Lambda functions. Example: 15 minutes for KBSyncHandler.
 - **Environment Variables**: Passed to Lambda functions, such as KNOWLEDGE_BASE_ID, DATA_SOURCE_ID_V1, and CRAWLER_BUCKET.
+- **Crawler region alignment**: `CRAWLER_REGION` is set from the deployed stack region so KBSync ECS task launches and crawler S3 reads use the same region as crawler resource ARNs.
 - **Nightly crawl controls**: Set `nightlyDeltaCrawlEnabled` and `nightlyDeltaCrawlTime` through repo variables or CDK context to control the nightly delta scheduler.
 
 ### crawler-stack.ts (ECS Task Configuration)

@@ -2,9 +2,11 @@ const { BedrockAgentClient, StartIngestionJobCommand } = require('@aws-sdk/clien
 const { ECSClient, RunTaskCommand } = require('@aws-sdk/client-ecs');
 const { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand, CopyObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
 
+// Keep ECS/S3 clients in the same region as deployed crawler resources to avoid ARN region mismatch errors.
+const crawlerRegion = process.env.CRAWLER_REGION || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-1';
 const bedrockClient = new BedrockAgentClient({});
-const ecsClient = new ECSClient({ region: process.env.CRAWLER_REGION || 'us-west-2' });
-const s3Client = new S3Client({ region: process.env.CRAWLER_REGION || 'us-west-2' });
+const ecsClient = new ECSClient({ region: crawlerRegion });
+const s3Client = new S3Client({ region: crawlerRegion });
 
 const BUCKET = process.env.CRAWLER_BUCKET;
 const INGESTION_PREFIX = 'ingestion-v1/';

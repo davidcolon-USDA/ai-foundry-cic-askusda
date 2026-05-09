@@ -99,6 +99,7 @@ This workspace uses two main GitHub Actions workflows:
       - Supports `crawl_batch`, `crawl`, `prepare`, and `ingest` modes.
       - Supports optional ECS polling so the workflow can wait for crawl completion and fail on task errors.
       - Polling controls: `wait_for_completion` (default `true`), `poll_interval_seconds` (default `30`), and `poll_timeout_minutes` (default `240`).
+      - Region alignment hardening: crawler launch clients now use the deployed crawler stack region to prevent ECS `Invalid Region in ARN` launch failures.
 
 4. **Nightly Delta Crawl Scheduler**
       - EventBridge Scheduler-backed nightly trigger for delta refreshes.
