@@ -78,6 +78,7 @@ jobs:
           echo "AMPLIFY_APP_ID=${APP_ID}" >> "$GITHUB_ENV"
 
       - name: Persist AMPLIFY_APP_ID repo variable
+        if: ${{ vars.AMPLIFY_APP_ID == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
