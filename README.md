@@ -97,6 +97,8 @@ This workspace uses two main GitHub Actions workflows:
       - Manual operator workflow for first-time or ad hoc crawl runs.
       - Reads `CIC-AskUSDA-main/backend/crawler/urls.yaml` and invokes `AskUSDA-KBSyncHandler`.
       - Supports `crawl_batch`, `crawl`, `prepare`, and `ingest` modes.
+      - Supports optional ECS polling so the workflow can wait for crawl completion and fail on task errors.
+      - Polling controls: `wait_for_completion` (default `true`), `poll_interval_seconds` (default `30`), and `poll_timeout_minutes` (default `240`).
 
 4. **Nightly Delta Crawl Scheduler**
       - EventBridge Scheduler-backed nightly trigger for delta refreshes.

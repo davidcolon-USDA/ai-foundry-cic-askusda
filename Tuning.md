@@ -25,6 +25,9 @@ This table summarizes the main tunable parameters for the AskUSDA system, where 
 |                     | Model IDs, region     | backend/lib/backend-stack.ts        | Passed as env vars |
 | **Crawler Jobs**    | Crawl jobs            | backend/crawler/urls.yaml           | Batch crawl definitions |
 | **Workflows**       | initial-crawl.yml      | .github/workflows/initial-crawl.yml | Manual first-time/ad hoc crawl trigger |
+|                     | wait_for_completion    | initial-crawl workflow input         | Wait for ECS crawl tasks and fail workflow on task errors |
+|                     | poll_interval_seconds  | initial-crawl workflow input         | Poll interval for ECS task status checks |
+|                     | poll_timeout_minutes   | initial-crawl workflow input         | Max time to wait for crawl task completion before timeout failure |
 |                     | nightly delta crawl    | backend/lib/backend-stack.ts, repo variables | Scheduled delta crawl that skips when no crawled data exists |
 
 ## How It Is Tuned
@@ -62,6 +65,9 @@ This table summarizes the main tunable parameters for the AskUSDA system, where 
 
 ### Workflow Controls
 - **Initial crawl workflow**: Use `.github/workflows/initial-crawl.yml` to run the first crawl or an operator-led recrawl from `urls.yaml`.
+- **Initial crawl completion tracking**: Set `wait_for_completion=true` to keep the workflow open until all launched ECS crawl tasks stop.
+- **Initial crawl polling cadence**: Set `poll_interval_seconds` to tune how often ECS task status is checked.
+- **Initial crawl timeout**: Set `poll_timeout_minutes` to cap runtime and fail the workflow if tasks do not complete in time.
 - **Nightly delta crawl**: Uses EventBridge Scheduler with a default run time of 1:00 AM America/Chicago and a boolean enable flag.
 - **Delta gate behavior**: The nightly run only proceeds when crawl artifacts already exist under the crawler output prefix.
 

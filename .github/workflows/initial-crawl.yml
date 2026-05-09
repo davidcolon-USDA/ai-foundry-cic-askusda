@@ -23,6 +23,21 @@ on:
         required: true
         default: false
         type: boolean
+      wait_for_completion:
+        description: "For crawl actions, wait for ECS tasks to finish and fail on task errors"
+        required: true
+        default: true
+        type: boolean
+      poll_interval_seconds:
+        description: "ECS polling interval in seconds"
+        required: true
+        default: "30"
+        type: string
+      poll_timeout_minutes:
+        description: "Maximum minutes to wait for ECS tasks"
+        required: true
+        default: "240"
+        type: string
 
 permissions:
   id-token: write
@@ -133,6 +148,133 @@ jobs:
             response.json
           echo "Invocation response:"
           cat response.json
+
+      - name: Poll ECS crawler tasks
+        if: ${{ steps.payload.outputs.dry_run != 'true' && inputs.wait_for_completion && (inputs.action == 'crawl_batch' || inputs.action == 'crawl') }}
+        env:
+          CRAWLER_CLUSTER_NAME: askusda-crawler-cluster
+          POLL_INTERVAL_SECONDS: ${{ inputs.poll_interval_seconds }}
+          POLL_TIMEOUT_MINUTES: ${{ inputs.poll_timeout_minutes }}
+        shell: bash
+        run: |
+          python <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import time
+
+
+          def normalize_payload(raw):
+            if isinstance(raw, str):
+              return json.loads(raw)
+            if isinstance(raw, dict) and isinstance(raw.get("body"), str):
+              try:
+                body = json.loads(raw["body"])
+                merged = dict(raw)
+                merged.update(body)
+                return merged
+              except json.JSONDecodeError:
+                return raw
+            return raw
+
+
+          def run_aws(cmd):
+            completed = subprocess.run(cmd, capture_output=True, text=True)
+            if completed.returncode != 0:
+              print("AWS CLI command failed:", " ".join(cmd))
+              print(completed.stderr.strip())
+              sys.exit(completed.returncode)
+            return completed.stdout
+
+
+          with open("response.json", "r", encoding="utf-8") as fh:
+            payload = normalize_payload(json.load(fh))
+
+          task_arns = []
+
+          # crawl_batch response shape
+          for item in payload.get("tasks", []):
+            arn = item.get("taskArn")
+            if arn and arn != "unknown":
+              task_arns.append(arn)
+
+          # crawl response shape
+          if not task_arns:
+            arn = payload.get("taskArn")
+            if arn and arn != "unknown":
+              task_arns.append(arn)
+
+          failed_launches = [
+            item for item in payload.get("tasks", [])
+            if item.get("error") or item.get("taskArn") in (None, "", "unknown")
+          ]
+          if failed_launches:
+            print("One or more crawler tasks failed to launch:")
+            print(json.dumps(failed_launches, indent=2))
+            sys.exit(1)
+
+          if not task_arns:
+            print("No ECS task ARNs returned by KBSyncHandler; failing workflow.")
+            print(json.dumps(payload, indent=2))
+            sys.exit(1)
+
+          cluster = os.environ.get("CRAWLER_CLUSTER_NAME", "askusda-crawler-cluster")
+          region = os.environ.get("AWS_REGION", "us-east-1")
+          poll_interval = max(5, int(os.environ.get("POLL_INTERVAL_SECONDS", "30")))
+          timeout_seconds = max(60, int(os.environ.get("POLL_TIMEOUT_MINUTES", "240")) * 60)
+          deadline = time.time() + timeout_seconds
+
+          print(f"Tracking {len(task_arns)} crawler task(s) in cluster {cluster}")
+          print(f"Poll interval: {poll_interval}s; timeout: {timeout_seconds // 60}m")
+
+          latest_tasks = []
+          while time.time() < deadline:
+            stdout = run_aws([
+              "aws", "ecs", "describe-tasks",
+              "--region", region,
+              "--cluster", cluster,
+              "--tasks", *task_arns,
+              "--output", "json",
+            ])
+            latest_tasks = json.loads(stdout).get("tasks", [])
+            running = [t for t in latest_tasks if t.get("lastStatus") != "STOPPED"]
+            print(f"Task progress: {len(latest_tasks) - len(running)}/{len(latest_tasks)} stopped")
+
+            if not running:
+              break
+            time.sleep(poll_interval)
+          else:
+            print("Timed out waiting for crawler tasks to stop.")
+            print(json.dumps(latest_tasks, indent=2))
+            sys.exit(1)
+
+          failures = []
+          for task in latest_tasks:
+            task_failures = []
+            for container in task.get("containers", []):
+              exit_code = container.get("exitCode")
+              if exit_code not in (None, 0):
+                task_failures.append({
+                  "container": container.get("name"),
+                  "exitCode": exit_code,
+                  "reason": container.get("reason", ""),
+                })
+
+            if task_failures:
+              failures.append({
+                "taskArn": task.get("taskArn"),
+                "stoppedReason": task.get("stoppedReason", ""),
+                "containers": task_failures,
+              })
+
+          if failures:
+            print("Crawler task failures detected:")
+            print(json.dumps(failures, indent=2))
+            sys.exit(1)
+
+          print("All tracked crawler tasks completed successfully.")
+          PY
 
       - name: Dry-run complete
         if: ${{ steps.payload.outputs.dry_run == 'true' }}

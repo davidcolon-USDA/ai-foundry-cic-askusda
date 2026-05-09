@@ -44,6 +44,7 @@ The goal was to make the original codebase reliably deployable through GitHub Ac
 5. Knowledge refresh controls:
    - Added operator-tunable crawl controls for nightly enablement and scheduled time.
    - Added a gate Lambda so the nightly delta crawl can skip empty runs instead of triggering needless ingestion.
+   - Added optional Initial Crawl ECS polling controls so operators can have the workflow block until crawl tasks complete and surface task-level failures.
 
 ## Net Result
 The repository is now deployable through GitHub Actions with significantly improved determinism:
