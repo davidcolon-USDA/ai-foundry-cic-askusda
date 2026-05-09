@@ -418,7 +418,10 @@ async function createFeedback(body) {
 exports.handler = async (event) => {
   // HTTP API v2 uses different event structure
   const httpMethod = event.requestContext?.http?.method || event.httpMethod;
-  const path = event.rawPath || event.path;
+  const rawPath = event.rawPath || event.path || '/';
+  // Normalize possible stage prefix (e.g. /prod/feedback) so routes work
+  // whether API Gateway includes the stage in rawPath or not.
+  const path = rawPath.replace(/^\/prod(?=\/|$)/, '') || '/';
   const pathParameters = event.pathParameters;
   const queryStringParameters = event.queryStringParameters;
   const body = event.body;

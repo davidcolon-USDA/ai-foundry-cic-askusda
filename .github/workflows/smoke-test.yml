@@ -1,6 +1,11 @@
 name: Smoke Test
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/smoke-test.yml"
   workflow_run:
     workflows:
       - "Deploy Application"
