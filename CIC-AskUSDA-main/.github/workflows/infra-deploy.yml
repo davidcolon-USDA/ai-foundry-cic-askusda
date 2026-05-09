@@ -1,0 +1,158 @@
+name: Deploy Infrastructure
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/bin/**"
+      - "backend/lib/**"
+      - "backend/cdk.json"
+      - "backend/package.json"
+      - "backend/package-lock.json"
+      - "backend/tsconfig.json"
+      - "backend/crawler/**"
+      - ".github/workflows/infra-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  actions: write
+
+jobs:
+  deploy-infra:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_DEFAULT_ACCOUNT: ${{ vars.CDK_DEFAULT_ACCOUNT }}
+      CDK_DEFAULT_REGION: ${{ vars.CDK_DEFAULT_REGION }}
+      CRAWLER_BUCKET_NAME: ${{ vars.CRAWLER_BUCKET_NAME }}
+      AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
+      AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
+      DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # New two-phase deployment behavior:
+      # Infra workflow now creates or discovers the Amplify app and branch first,
+      # then persists AMPLIFY_APP_ID as a repo variable so app workflow can run
+      # without manual pre-seeding (avoids chicken-and-egg setup).
+      - name: Resolve or create Amplify app and branch
+        id: amplify
+        run: |
+          APP_NAME="${AMPLIFY_APP_NAME:-AskUSDA-Frontend}"
+          BRANCH_NAME="${DEPLOY_BRANCH:-main}"
+          APP_ID="${AMPLIFY_APP_ID:-}"
+
+          if [ -z "${APP_ID}" ]; then
+            APP_ID=$(aws amplify list-apps --region "${AWS_REGION}" --query "apps[?name=='${APP_NAME}'].appId | [0]" --output text)
+            if [ -z "${APP_ID}" ] || [ "${APP_ID}" = "None" ]; then
+              APP_ID=$(aws amplify create-app --name "${APP_NAME}" --platform WEB --region "${AWS_REGION}" --query 'app.appId' --output text)
+              echo "Created Amplify app ${APP_NAME} (${APP_ID})"
+            else
+              echo "Found existing Amplify app ${APP_NAME} (${APP_ID})"
+            fi
+          else
+            echo "Using preconfigured AMPLIFY_APP_ID (${APP_ID})"
+          fi
+
+          EXISTS=$(aws amplify list-branches --app-id "${APP_ID}" --region "${AWS_REGION}" --query "branches[?branchName=='${BRANCH_NAME}'].branchName | [0]" --output text)
+          if [ -z "${EXISTS}" ] || [ "${EXISTS}" = "None" ]; then
+            aws amplify create-branch --app-id "${APP_ID}" --branch-name "${BRANCH_NAME}" --region "${AWS_REGION}" >/dev/null
+            echo "Created Amplify branch ${BRANCH_NAME}"
+          else
+            echo "Amplify branch ${BRANCH_NAME} already exists"
+          fi
+
+          echo "app_id=${APP_ID}" >> "$GITHUB_OUTPUT"
+          echo "AMPLIFY_APP_ID=${APP_ID}" >> "$GITHUB_ENV"
+
+      # New two-phase deployment behavior:
+      # Persist the resolved app ID to repo variables so subsequent app workflow
+      # runs can deploy frontend artifacts with no manual variable updates.
+      - name: Persist AMPLIFY_APP_ID repo variable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PAYLOAD=$(jq -cn --arg name "AMPLIFY_APP_ID" --arg value "${{ steps.amplify.outputs.app_id }}" '{name:$name,value:$value}')
+          CREATE_STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
+            -d "${PAYLOAD}")
+
+          if [ "${CREATE_STATUS}" = "201" ] || [ "${CREATE_STATUS}" = "204" ]; then
+            echo "Created/updated AMPLIFY_APP_ID variable"
+            exit 0
+          fi
+
+          if [ "${CREATE_STATUS}" = "409" ] || [ "${CREATE_STATUS}" = "422" ]; then
+            PATCH_STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+              -X PATCH \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/variables/AMPLIFY_APP_ID" \
+              -d "$(jq -cn --arg value "${{ steps.amplify.outputs.app_id }}" '{value:$value}')")
+            [ "${PATCH_STATUS}" = "204" ] || { echo "Failed to patch AMPLIFY_APP_ID (HTTP ${PATCH_STATUS})"; exit 1; }
+            echo "Updated AMPLIFY_APP_ID variable"
+            exit 0
+          fi
+
+          echo "Failed to create AMPLIFY_APP_ID (HTTP ${CREATE_STATUS})"
+          exit 1
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Install Lambda dependencies
+        run: |
+          cd backend/lambda/websocket-handler && npm ci
+          cd ../kb-sync-handler && npm ci
+          cd ../admin-api && npm ci
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: CDK bootstrap
+        working-directory: backend
+        run: |
+          RESOLVED_AMPLIFY_APP_ID="${{ steps.amplify.outputs.app_id }}"
+          CONTEXT_ARGS=""
+          if [ -n "${RESOLVED_AMPLIFY_APP_ID}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context amplifyAppId=${RESOLVED_AMPLIFY_APP_ID}"
+          fi
+          if [ -n "${CRAWLER_BUCKET_NAME}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context crawlerBucketName=${CRAWLER_BUCKET_NAME}"
+          fi
+          cdk bootstrap --require-approval never ${CONTEXT_ARGS}
+
+      - name: Deploy crawler and backend stacks
+        working-directory: backend
+        run: |
+          RESOLVED_AMPLIFY_APP_ID="${{ steps.amplify.outputs.app_id }}"
+          CONTEXT_ARGS=""
+          if [ -n "${RESOLVED_AMPLIFY_APP_ID}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context amplifyAppId=${RESOLVED_AMPLIFY_APP_ID}"
+          fi
+          if [ -n "${CRAWLER_BUCKET_NAME}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context crawlerBucketName=${CRAWLER_BUCKET_NAME}"
+          fi
+          cdk deploy AskUSDA-Crawler AskUSDA-Backend --require-approval never ${CONTEXT_ARGS}

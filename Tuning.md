@@ -1,0 +1,69 @@
+# Tuning and Configuration Reference
+
+This table summarizes the main tunable parameters for the AskUSDA system, where to set them, and their purpose.
+
+| Area                | Parameter/Setting      | Where to Set/Change                | Purpose/Notes |
+|---------------------|-----------------------|-------------------------------------|--------------|
+| **Infrastructure**  | Lambda memorySize     | backend/lib/backend-stack.ts        | Adjust Lambda RAM (MB) |
+|                     | Lambda timeout        | backend/lib/backend-stack.ts        | Max Lambda execution time |
+|                     | ECS memoryLimitMiB    | backend/lib/crawler-stack.ts        | Crawler container RAM (MB) |
+|                     | ECS cpu               | backend/lib/crawler-stack.ts        | Crawler container CPU units |
+|                     | Environment variables | backend/lib/backend-stack.ts, crawler-stack.ts | Passed to Lambda/ECS |
+| **Crawler**         | SEED_URL              | Env var or urls.yaml                | Starting URL for crawl |
+|                     | S3_BUCKET             | Env var or urls.yaml                | Output bucket |
+|                     | JOB_ID                | Env var or urls.yaml                | Crawl job ID |
+|                     | MAX_PAGES             | Env var or urls.yaml                | Max pages to crawl |
+|                     | MAX_DEPTH             | Env var or urls.yaml                | Link-hop depth |
+|                     | SCOPE_TYPE            | Env var or urls.yaml                | URL filtering (path, host, etc.) |
+|                     | PDF_SCOPE             | Env var or urls.yaml                | PDF download scope |
+|                     | DOC_SCOPE             | Env var or urls.yaml                | Doc download scope |
+|                     | USE_BROWSER           | Env var or urls.yaml                | Browser mode (auto/on/off) |
+|                     | MAX_CONCURRENT        | Env var or urls.yaml                | Parallel requests |
+| **Backend Lambda**  | Table names, IDs      | backend/lib/backend-stack.ts        | Passed as env vars |
+|                     | Model IDs, region     | backend/lib/backend-stack.ts        | Passed as env vars |
+| **Crawler Jobs**    | Crawl jobs            | backend/crawler/urls.yaml           | Batch crawl definitions |
+
+## Detailed Parameter Descriptions
+
+### config.py (Crawler Configuration)
+- **SEED_URL**: The starting URL for the crawler. Example: "https://www.usda.gov/snap".
+- **S3_BUCKET**: The S3 bucket where crawled data is stored. Must match the Bedrock Knowledge Base data source.
+- **JOB_ID**: A unique identifier for the crawl job. Auto-generated if not provided.
+- **MAX_PAGES**: Maximum number of pages to scrape. Default: 500.
+- **MAX_DEPTH**: Maximum link-hop depth. Default: 2.
+- **SCOPE_TYPE**: URL filtering type (e.g., path, host, subdomains, all, none). Default: all.
+- **PDF_SCOPE/DOC_SCOPE**: Scope for downloading PDFs and Office documents. Default: same as SCOPE_TYPE.
+- **USE_BROWSER**: Browser mode for crawling (auto, on, off). Default: auto.
+- **MAX_CONCURRENT**: Maximum concurrent requests. Default: 20.
+
+### backend-stack.ts (Infrastructure Configuration)
+- **Lambda memorySize**: Configures the memory allocated to Lambda functions. Example: 1024 MB for KBSyncHandler.
+- **Lambda timeout**: Maximum execution time for Lambda functions. Example: 15 minutes for KBSyncHandler.
+- **Environment Variables**: Passed to Lambda functions, such as KNOWLEDGE_BASE_ID, DATA_SOURCE_ID_V1, and CRAWLER_BUCKET.
+
+### crawler-stack.ts (ECS Task Configuration)
+- **memoryLimitMiB**: Memory allocated to the ECS Fargate task. Example: 4096 MB.
+- **cpu**: CPU units allocated to the ECS Fargate task. Example: 2048.
+- **Environment Variables**: Passed to the ECS container, such as USE_S3 and S3_BUCKET.
+
+Refer to the respective files for additional inline comments and examples.
+
+**How to Tune (Revised for EC2 with AWS CLI):**
+- For infrastructure (memory, CPU, timeouts):
+  1. SSH into the EC2 instance.
+  2. Navigate to the project directory.
+  3. Edit the CDK stack files (e.g., `backend-stack.ts`, `crawler-stack.ts`).
+  4. Deploy changes using the AWS CLI:
+     ```bash
+     cdk deploy --all
+     ```
+
+- For crawler jobs:
+  1. Edit `urls.yaml` to define new crawl jobs.
+  2. Run the crawler locally or trigger it via ECS.
+
+- For Lambda/backend configuration:
+  1. Update environment variables in the CDK stack files.
+  2. Redeploy the stack using the AWS CLI.
+
+The EC2 instance with the proper IAM role and AWS CLI pre-configured simplifies deployment and tuning by eliminating the need for manual credential setup.

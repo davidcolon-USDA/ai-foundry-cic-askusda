@@ -1,0 +1,77 @@
+name: Destroy Infrastructure and App
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type DESTROY to confirm"
+        required: true
+        type: string
+      stack_name:
+        description: "Primary backend stack"
+        required: false
+        default: "AskUSDA-Backend"
+        type: string
+      crawler_stack_name:
+        description: "Crawler stack"
+        required: false
+        default: "AskUSDA-Crawler"
+        type: string
+      destroy_amplify_app:
+        description: "Also delete Amplify app"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  destroy:
+    if: ${{ github.event.inputs.confirm == 'DESTROY' }}
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_DEFAULT_ACCOUNT: ${{ vars.CDK_DEFAULT_ACCOUNT }}
+      CDK_DEFAULT_REGION: ${{ vars.CDK_DEFAULT_REGION }}
+      AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: Destroy backend and crawler stacks
+        working-directory: backend
+        run: |
+          cdk destroy "${{ github.event.inputs.stack_name }}" "${{ github.event.inputs.crawler_stack_name }}" --force
+
+      - name: Optionally delete Amplify app
+        if: ${{ github.event.inputs.destroy_amplify_app == 'true' }}
+        run: |
+          if [ -z "${AMPLIFY_APP_ID}" ]; then
+            echo "AMPLIFY_APP_ID variable not set, cannot delete Amplify app"
+            exit 1
+          fi
+          aws amplify delete-app --app-id "${AMPLIFY_APP_ID}" --region "${AWS_REGION}"
+
+      - name: Completed
+        run: echo "Destroy workflow completed."

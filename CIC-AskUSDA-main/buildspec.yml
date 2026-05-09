@@ -1,0 +1,109 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - echo "Installing AWS CDK CLI..."
+      - npm install -g aws-cdk
+      - echo "Installing zip utility for frontend..."
+      - yum install -y zip
+
+  pre_build:
+    commands:
+      - echo "=== BACKEND DEPLOYMENT ==="
+      - echo "Changing into backend directory"
+      - cd backend
+      - echo "Installing backend dependencies..."
+      - npm ci
+      - echo "Installing Lambda dependencies..."
+      - cd lambda/websocket-handler && npm ci && cd ../..
+      - cd lambda/kb-sync-handler && npm ci && cd ../..
+      - cd lambda/admin-api && npm ci && cd ../..
+      - echo "Bootstrapping CDK..."
+      - cdk bootstrap --require-approval never --context amplifyAppId=$AMPLIFY_APP_ID
+
+  build:
+    commands:
+      - echo "Deploying CDK stacks (Crawler + Backend)..."
+      - |
+        CDK_CONTEXT="--context amplifyAppId=$AMPLIFY_APP_ID"
+        if [ -n "$CRAWLER_BUCKET_NAME" ]; then
+          CDK_CONTEXT="$CDK_CONTEXT --context crawlerBucketName=$CRAWLER_BUCKET_NAME"
+        fi
+        cdk deploy --all --require-approval never $CDK_CONTEXT
+      - echo "CDK deployment complete."
+      - echo "Extracting stack outputs..."
+      - cd ..
+      - export WEBSOCKET_URL=$(aws cloudformation describe-stacks --stack-name AskUSDA-Backend --query 'Stacks[0].Outputs[?OutputKey==`WebSocketUrl`].OutputValue' --output text --region $AWS_DEFAULT_REGION)
+      - export ADMIN_API_URL=$(aws cloudformation describe-stacks --stack-name AskUSDA-Backend --query 'Stacks[0].Outputs[?OutputKey==`AdminApiUrl`].OutputValue' --output text --region $AWS_DEFAULT_REGION)
+      - export COGNITO_USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name AskUSDA-Backend --query 'Stacks[0].Outputs[?OutputKey==`AdminUserPoolId`].OutputValue' --output text --region $AWS_DEFAULT_REGION)
+      - export COGNITO_CLIENT_ID=$(aws cloudformation describe-stacks --stack-name AskUSDA-Backend --query 'Stacks[0].Outputs[?OutputKey==`AdminUserPoolClientId`].OutputValue' --output text --region $AWS_DEFAULT_REGION)
+      - echo "Stack outputs extracted."
+      - echo ""
+      - echo "=== FRONTEND DEPLOYMENT ==="
+      - cd frontend
+      - echo "Installing frontend dependencies..."
+      - npm ci
+      - echo "Writing .env.local..."
+      - echo "NEXT_PUBLIC_WEBSOCKET_URL=$WEBSOCKET_URL" > .env.local
+      - echo "NEXT_PUBLIC_ADMIN_API_URL=$ADMIN_API_URL" >> .env.local
+      - echo "NEXT_PUBLIC_COGNITO_USER_POOL_ID=$COGNITO_USER_POOL_ID" >> .env.local
+      - echo "NEXT_PUBLIC_COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID" >> .env.local
+      - echo "NEXT_PUBLIC_AWS_REGION=$AWS_DEFAULT_REGION" >> .env.local
+      - echo "Building Next.js application..."
+      - npm run build
+      - echo "Creating deployment package..."
+      - cd out && zip -r build.zip .
+
+  post_build:
+    commands:
+      - echo "Deploying frontend to Amplify..."
+      # Navigate to repo root first for consistent pathing
+      - cd $CODEBUILD_SRC_DIR
+      # Only deploy frontend if the build phase succeeded (out/ directory exists with build.zip)
+      - |
+        if [ ! -f "frontend/out/build.zip" ]; then
+          echo "ERROR: frontend/out/build.zip not found. Backend or frontend build likely failed."
+          echo "Skipping Amplify deployment."
+          exit 1
+        fi
+      - echo "Creating Amplify deployment..."
+      - aws amplify create-deployment --app-id $AMPLIFY_APP_ID --branch-name master --region $AWS_DEFAULT_REGION --output json > deployment_response.json
+      - |
+        if [ $? -ne 0 ]; then
+          echo "Failed to create Amplify deployment. Check if a deployment is already running."
+          exit 1
+        fi
+      - echo "Preparing Amplify deployment..."
+      - export UPLOAD_URL=$(node -e "const data=require('./deployment_response.json'); process.stdout.write(data.zipUploadUrl)")
+      - export JOB_ID=$(node -e "const data=require('./deployment_response.json'); process.stdout.write(data.jobId)")
+      - echo "Uploading build.zip to Amplify..."
+      - curl -s -X PUT -T frontend/out/build.zip "$UPLOAD_URL" > /dev/null
+      - |
+        if [ $? -ne 0 ]; then
+          echo "Failed to upload build.zip to Amplify"
+          exit 1
+        fi
+      - echo "Starting deployment..."
+      - aws amplify start-deployment --app-id $AMPLIFY_APP_ID --branch-name master --job-id $JOB_ID --region $AWS_DEFAULT_REGION
+      - echo "Frontend deployment complete!"
+      - echo ""
+      - echo "=== AUTO-CRAWL (Initial Data Ingestion) ==="
+      - echo "Triggering batch crawl from urls.yaml to populate Knowledge Base..."
+      - cd $CODEBUILD_SRC_DIR/backend/crawler
+      - |
+        JOBS_JSON=$(python3 -c "import yaml, json; cfg = yaml.safe_load(open('urls.yaml')); print(json.dumps({'action': 'crawl_batch', 'jobs': cfg.get('crawl_jobs', [])}))")
+        echo "Found $(echo "$JOBS_JSON" | python3 -c 'import sys,json; print(len(json.load(sys.stdin).get("jobs",[])))') crawl jobs in urls.yaml"
+        aws lambda invoke \
+          --function-name AskUSDA-KBSyncHandler \
+          --invocation-type Event \
+          --payload "$JOBS_JSON" \
+          --cli-binary-format raw-in-base64-out \
+          --region $AWS_DEFAULT_REGION \
+          /tmp/crawl-response.json || echo "Warning: Batch crawl trigger failed (non-blocking)"
+      - echo "Batch crawl triggered (one ECS task per URL, running in parallel)"
+      - echo "Each crawl will auto-trigger ingestion when complete"
+      - echo ""
+      - echo "Complete deployment finished successfully!"
