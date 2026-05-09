@@ -132,6 +132,8 @@ export class CrawlerStack extends Stack {
 
     const crawlerDir = path.resolve(__dirname, "..", "crawler");
 
+    // NOTE: ECR image tag mutability is set to MUTABLE for development/testing only.
+    //       DO NOT USE MUTABLE TAGS IN PRODUCTION (security and traceability risk).
     const dockerImage = new ecr_assets.DockerImageAsset(
       this,
       "CrawlerImage",
@@ -151,6 +153,8 @@ export class CrawlerStack extends Stack {
           ".DS_Store",
           "*.pyc",
         ],
+        repositoryName: `cdk-hnb659fds-container-assets-${this.account}-${this.region}`,
+        repositoryNameMutability: ecr_assets.TagMutability.MUTABLE,
       }
     );
 
