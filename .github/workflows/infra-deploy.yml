@@ -79,6 +79,7 @@ jobs:
 
       - name: Persist AMPLIFY_APP_ID repo variable
         if: ${{ vars.AMPLIFY_APP_ID == '' }}
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -106,6 +107,11 @@ jobs:
               -d "$(jq -cn --arg value "${{ steps.amplify.outputs.app_id }}" '{value:$value}')")
             [ "${PATCH_STATUS}" = "204" ] || { echo "Failed to patch AMPLIFY_APP_ID (HTTP ${PATCH_STATUS})"; exit 1; }
             echo "Updated AMPLIFY_APP_ID variable"
+            exit 0
+          fi
+
+          if [ "${CREATE_STATUS}" = "403" ]; then
+            echo "Warning: GITHUB_TOKEN cannot manage Actions variables in this repo (HTTP 403). Continuing with in-run AMPLIFY_APP_ID."
             exit 0
           fi
 

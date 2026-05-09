@@ -23,6 +23,7 @@ jobs:
       CDK_DEFAULT_REGION: ${{ vars.CDK_DEFAULT_REGION }}
       STACK_NAME: ${{ vars.STACK_NAME }}
       AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
+      AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
       DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
 
     steps:
@@ -40,11 +41,17 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Validate infra phase completed
+      - name: Resolve Amplify app id
         run: |
           if [ -z "${AMPLIFY_APP_ID}" ]; then
-            echo "Missing repo variable AMPLIFY_APP_ID. Run the infrastructure workflow first."
-            exit 1
+            APP_NAME="${AMPLIFY_APP_NAME:-AskUSDA-Frontend}"
+            LOOKUP_APP_ID=$(aws amplify list-apps --region "${AWS_REGION}" --query "apps[?name=='${APP_NAME}'].appId | [0]" --output text)
+            if [ -z "${LOOKUP_APP_ID}" ] || [ "${LOOKUP_APP_ID}" = "None" ]; then
+              echo "Unable to resolve AMPLIFY_APP_ID. Run infrastructure workflow first to create Amplify app ${APP_NAME}."
+              exit 1
+            fi
+            echo "AMPLIFY_APP_ID=${LOOKUP_APP_ID}" >> "$GITHUB_ENV"
+            echo "Resolved AMPLIFY_APP_ID=${LOOKUP_APP_ID} from Amplify app name ${APP_NAME}"
           fi
 
       - name: Install backend dependencies
