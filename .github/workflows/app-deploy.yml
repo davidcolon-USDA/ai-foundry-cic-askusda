@@ -106,6 +106,7 @@ jobs:
           cd out && zip -r build.zip .
 
       - name: Deploy frontend to Amplify
+        id: amplify_deploy
         run: |
           if [ -z "${AMPLIFY_APP_ID}" ]; then
             echo "Missing repo variable AMPLIFY_APP_ID"
@@ -118,3 +119,91 @@ jobs:
           JOB_ID=$(node -e "const d=require('./deployment_response.json'); process.stdout.write(d.jobId)")
           curl -s -X PUT -T CIC-AskUSDA-main/frontend/out/build.zip "${UPLOAD_URL}" > /dev/null
           aws amplify start-deployment --app-id "${AMPLIFY_APP_ID}" --branch-name "${BRANCH}" --job-id "${JOB_ID}" --region "${AWS_REGION}"
+          echo "job_id=${JOB_ID}" >> "$GITHUB_OUTPUT"
+          echo "branch_name=${BRANCH}" >> "$GITHUB_OUTPUT"
+
+      # Smoke test phase: first wait for the Amplify deployment to finish, then
+      # verify basic frontend and public API functionality to catch broken releases.
+      - name: Wait for Amplify deployment completion
+        run: |
+          APP_ID="${AMPLIFY_APP_ID}"
+          BRANCH="${{ steps.amplify_deploy.outputs.branch_name }}"
+          JOB_ID="${{ steps.amplify_deploy.outputs.job_id }}"
+
+          if [ -z "${JOB_ID}" ]; then
+            echo "Missing Amplify job id from deployment step"
+            exit 1
+          fi
+
+          for i in {1..30}; do
+            STATUS=$(aws amplify get-job \
+              --app-id "${APP_ID}" \
+              --branch-name "${BRANCH}" \
+              --job-id "${JOB_ID}" \
+              --region "${AWS_REGION}" \
+              --query 'job.summary.status' \
+              --output text)
+
+            echo "Amplify deployment status: ${STATUS}"
+
+            if [ "${STATUS}" = "SUCCEED" ]; then
+              exit 0
+            fi
+
+            if [ "${STATUS}" = "FAILED" ] || [ "${STATUS}" = "CANCELLED" ]; then
+              echo "Amplify deployment ended with status ${STATUS}"
+              exit 1
+            fi
+
+            sleep 20
+          done
+
+          echo "Amplify deployment did not complete in expected time window"
+          exit 1
+
+      - name: Smoke test deployed frontend and public API
+        run: |
+          ADMIN_API_URL="${{ steps.stack.outputs.admin_api_url }}"
+          APP_ID="${AMPLIFY_APP_ID}"
+          BRANCH="${{ steps.amplify_deploy.outputs.branch_name }}"
+
+          FRONTEND_URL=$(aws amplify get-branch \
+            --app-id "${APP_ID}" \
+            --branch-name "${BRANCH}" \
+            --region "${AWS_REGION}" \
+            --query 'branch.webUrl' \
+            --output text)
+
+          if [ -z "${FRONTEND_URL}" ] || [ "${FRONTEND_URL}" = "None" ]; then
+            echo "Unable to resolve Amplify frontend URL for smoke test"
+            exit 1
+          fi
+
+          FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://${FRONTEND_URL}")
+          echo "Frontend status code: ${FRONTEND_CODE}"
+          if [ "${FRONTEND_CODE}" -lt 200 ] || [ "${FRONTEND_CODE}" -ge 400 ]; then
+            echo "Frontend smoke test failed"
+            exit 1
+          fi
+
+          FEEDBACK_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --data '{"conversationId":"smoke-feedback","feedback":"pos"}' \
+            "${ADMIN_API_URL}feedback")
+          echo "POST /feedback status code: ${FEEDBACK_CODE}"
+          if [ "${FEEDBACK_CODE}" -lt 200 ] || [ "${FEEDBACK_CODE}" -ge 400 ]; then
+            echo "Admin API smoke test failed on /feedback"
+            exit 1
+          fi
+
+          ESCALATION_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --data '{"name":"Smoke Test","email":"smoke@example.com","question":"smoke test"}' \
+            "${ADMIN_API_URL}escalations")
+          echo "POST /escalations status code: ${ESCALATION_CODE}"
+          if [ "${ESCALATION_CODE}" -lt 200 ] || [ "${ESCALATION_CODE}" -ge 400 ]; then
+            echo "Admin API smoke test failed on /escalations"
+            exit 1
+          fi
