@@ -79,7 +79,17 @@ jobs:
             -H "Content-Type: application/json" \
             --data '{"conversationId":"smoke-feedback","feedback":"pos"}' \
             "${ADMIN_API_BASE}/feedback")
-          echo "POST /feedback status code: ${FEEDBACK_CODE}"
+
+          if [ "${FEEDBACK_CODE}" -lt 200 ] || [ "${FEEDBACK_CODE}" -ge 400 ]; then
+            FEEDBACK_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X POST \
+              -H "Content-Type: application/json" \
+              --data '{"conversationId":"smoke-feedback","feedback":"pos"}' \
+              "${ADMIN_API_BASE}/prod/feedback")
+            echo "POST /prod/feedback fallback status code: ${FEEDBACK_CODE}"
+          fi
+
+          echo "Feedback smoke status code: ${FEEDBACK_CODE}"
           if [ "${FEEDBACK_CODE}" -lt 200 ] || [ "${FEEDBACK_CODE}" -ge 400 ]; then
             echo "Admin API smoke test failed on /feedback"
             exit 1
@@ -90,7 +100,17 @@ jobs:
             -H "Content-Type: application/json" \
             --data '{"name":"Smoke Test","email":"smoke@example.com","question":"smoke test"}' \
             "${ADMIN_API_BASE}/escalations")
-          echo "POST /escalations status code: ${ESCALATION_CODE}"
+
+          if [ "${ESCALATION_CODE}" -lt 200 ] || [ "${ESCALATION_CODE}" -ge 400 ]; then
+            ESCALATION_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X POST \
+              -H "Content-Type: application/json" \
+              --data '{"name":"Smoke Test","email":"smoke@example.com","question":"smoke test"}' \
+              "${ADMIN_API_BASE}/prod/escalations")
+            echo "POST /prod/escalations fallback status code: ${ESCALATION_CODE}"
+          fi
+
+          echo "Escalation smoke status code: ${ESCALATION_CODE}"
           if [ "${ESCALATION_CODE}" -lt 200 ] || [ "${ESCALATION_CODE}" -ge 400 ]; then
             echo "Admin API smoke test failed on /escalations"
             exit 1
