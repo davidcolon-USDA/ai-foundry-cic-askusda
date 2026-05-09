@@ -49,6 +49,16 @@ AskUSDA is an AI-powered chatbot designed to help the public, farmers, and ranch
 ## Summary
 AskUSDA is a modern, AI-driven chatbot platform for USDA information, with robust backend infrastructure, real-time chat, feedback, and escalation handling, all built on AWS serverless technologies.
 
+## LLM, RAG, and Guardrail
+
+The chat experience is powered by a retrieval-augmented generation pipeline rather than a standalone prompt-only model. The WebSocket handler first applies Bedrock Guardrail checks to the user message, then retrieves relevant USDA context from the Bedrock Knowledge Base, and finally streams a Nova Pro response back to the client with citations.
+
+- **Generation model**: Amazon Nova Pro v1:0 via the cross-region inference profile used by the WebSocket handler.
+- **Embedding model**: Amazon Titan Embed Text v2:0 for the knowledge base.
+- **Reranking**: Amazon Rerank v1:0 to improve retrieved context quality.
+- **Guardrail**: Defined in the backend CDK stack and enabled in the WebSocket handler via environment variables.
+- **Outcome**: The assistant stays grounded in USDA sources, uses citations, and falls back to safe messaging when the guardrail intervenes.
+
 ## CI/CD Pipeline
 
 The AskUSDA application employs a robust CI/CD pipeline to automate deployment and ensure consistent delivery of updates. The pipeline is centered around AWS CodeBuild and Amplify, with the following key steps:

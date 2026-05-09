@@ -73,6 +73,11 @@ jobs:
       - name: Deploy backend stack for Lambda/app updates
         working-directory: CIC-AskUSDA-main/backend
         run: |
+          aws cloudformation delete-change-set \
+            --stack-name "${STACK_NAME:-AskUSDA-Backend}" \
+            --change-set-name cdk-deploy-change-set \
+            --region "${AWS_REGION}" >/dev/null 2>&1 || true
+
           TARGET_STACK="${STACK_NAME:-AskUSDA-Backend}"
           CONTEXT_ARGS=""
           if [ -n "${AMPLIFY_APP_ID}" ]; then

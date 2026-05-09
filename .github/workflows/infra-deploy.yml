@@ -172,6 +172,13 @@ jobs:
       - name: Deploy crawler and backend stacks
         working-directory: CIC-AskUSDA-main/backend
         run: |
+          for STACK_NAME in AskUSDA-Crawler AskUSDA-Backend; do
+            aws cloudformation delete-change-set \
+              --stack-name "${STACK_NAME}" \
+              --change-set-name cdk-deploy-change-set \
+              --region "${AWS_REGION}" >/dev/null 2>&1 || true
+          done
+
           RESOLVED_AMPLIFY_APP_ID="${{ steps.amplify.outputs.app_id }}"
           CONTEXT_ARGS=""
           if [ -n "${RESOLVED_AMPLIFY_APP_ID}" ]; then

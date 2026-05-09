@@ -27,6 +27,15 @@ This table summarizes the main tunable parameters for the AskUSDA system, where 
 | **Workflows**       | initial-crawl.yml      | .github/workflows/initial-crawl.yml | Manual first-time/ad hoc crawl trigger |
 |                     | nightly delta crawl    | backend/lib/backend-stack.ts, repo variables | Scheduled delta crawl that skips when no crawled data exists |
 
+## How It Is Tuned
+
+- **LLM selection**: The chat model is set in `backend/lib/backend-stack.ts` and currently points to Nova Pro v1:0 for streaming generation.
+- **Retrieval quality**: The WebSocket handler sets the number of retrieved results and reranking behavior in `backend/lambda/websocket-handler/index.js`.
+- **Guardrail policy**: Content filtering is defined in `backend/lib/backend-stack.ts` and enabled in the WebSocket handler through `GUARDRAIL_ID` and `GUARDRAIL_VERSION` environment variables.
+- **Prompt behavior**: The system prompt in `backend/lambda/websocket-handler/index.js` controls answer style, citation expectations, scope boundaries, and fallback messaging.
+- **Crawler refresh**: First-time crawls use `.github/workflows/initial-crawl.yml`; nightly delta crawls are controlled by repo variables and the scheduler configuration in `backend/lib/backend-stack.ts`.
+- **Nightly crawl gate**: The nightly trigger only forwards the crawl when prior crawl artifacts already exist under the crawler output prefix.
+
 ## Detailed Parameter Descriptions
 
 ### config.py (Crawler Configuration)
