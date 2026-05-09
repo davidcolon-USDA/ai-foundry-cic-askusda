@@ -1,0 +1,97 @@
+name: Smoke Test
+
+on:
+  workflow_run:
+    workflows:
+      - "Deploy Application"
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  smoke-test:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      STACK_NAME: ${{ vars.STACK_NAME }}
+      AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
+      AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
+      DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Resolve Amplify app id
+        run: |
+          if [ -z "${AMPLIFY_APP_ID}" ]; then
+            APP_NAME="${AMPLIFY_APP_NAME:-AskUSDA-Frontend}"
+            LOOKUP_APP_ID=$(aws amplify list-apps --region "${AWS_REGION}" --query "apps[?name=='${APP_NAME}'].appId | [0]" --output text)
+            if [ -z "${LOOKUP_APP_ID}" ] || [ "${LOOKUP_APP_ID}" = "None" ]; then
+              echo "Unable to resolve AMPLIFY_APP_ID for smoke test"
+              exit 1
+            fi
+            echo "AMPLIFY_APP_ID=${LOOKUP_APP_ID}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Resolve backend outputs
+        id: stack
+        run: |
+          TARGET_STACK="${STACK_NAME:-AskUSDA-Backend}"
+          echo "admin_api_url=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`AdminApiUrl`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test deployed frontend and public API
+        run: |
+          ADMIN_API_URL="${{ steps.stack.outputs.admin_api_url }}"
+          APP_ID="${AMPLIFY_APP_ID}"
+          BRANCH="${DEPLOY_BRANCH:-main}"
+          ADMIN_API_BASE="${ADMIN_API_URL%/}"
+
+          FRONTEND_URL=$(aws amplify get-branch \
+            --app-id "${APP_ID}" \
+            --branch-name "${BRANCH}" \
+            --region "${AWS_REGION}" \
+            --query 'branch.webUrl' \
+            --output text)
+
+          if [ -z "${FRONTEND_URL}" ] || [ "${FRONTEND_URL}" = "None" ]; then
+            FRONTEND_URL="https://${BRANCH}.${APP_ID}.amplifyapp.com"
+            echo "Using fallback Amplify URL: ${FRONTEND_URL}"
+          fi
+
+          FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${FRONTEND_URL}")
+          echo "Frontend status code: ${FRONTEND_CODE}"
+          if [ "${FRONTEND_CODE}" -lt 200 ] || [ "${FRONTEND_CODE}" -ge 400 ]; then
+            echo "Frontend smoke test failed"
+            exit 1
+          fi
+
+          FEEDBACK_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --data '{"conversationId":"smoke-feedback","feedback":"pos"}' \
+            "${ADMIN_API_BASE}/feedback")
+          echo "POST /feedback status code: ${FEEDBACK_CODE}"
+          if [ "${FEEDBACK_CODE}" -lt 200 ] || [ "${FEEDBACK_CODE}" -ge 400 ]; then
+            echo "Admin API smoke test failed on /feedback"
+            exit 1
+          fi
+
+          ESCALATION_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --data '{"name":"Smoke Test","email":"smoke@example.com","question":"smoke test"}' \
+            "${ADMIN_API_BASE}/escalations")
+          echo "POST /escalations status code: ${ESCALATION_CODE}"
+          if [ "${ESCALATION_CODE}" -lt 200 ] || [ "${ESCALATION_CODE}" -ge 400 ]; then
+            echo "Admin API smoke test failed on /escalations"
+            exit 1
+          fi
