@@ -1,0 +1,113 @@
+name: Deploy Application
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "CIC-AskUSDA-main/frontend/**"
+      - "CIC-AskUSDA-main/backend/lambda/**"
+      - ".github/workflows/app-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-app:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_DEFAULT_ACCOUNT: ${{ vars.CDK_DEFAULT_ACCOUNT }}
+      CDK_DEFAULT_REGION: ${{ vars.CDK_DEFAULT_REGION }}
+      STACK_NAME: ${{ vars.STACK_NAME }}
+      AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
+      DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Validate infra phase completed
+        run: |
+          if [ -z "${AMPLIFY_APP_ID}" ]; then
+            echo "Missing repo variable AMPLIFY_APP_ID. Run the infrastructure workflow first."
+            exit 1
+          fi
+
+      - name: Install backend dependencies
+        working-directory: CIC-AskUSDA-main/backend
+        run: npm ci
+
+      - name: Install Lambda dependencies
+        run: |
+          cd CIC-AskUSDA-main/backend/lambda/websocket-handler && npm ci
+          cd ../kb-sync-handler && npm ci
+          cd ../admin-api && npm ci
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: Deploy backend stack for Lambda/app updates
+        working-directory: CIC-AskUSDA-main/backend
+        run: |
+          TARGET_STACK="${STACK_NAME:-AskUSDA-Backend}"
+          CONTEXT_ARGS=""
+          if [ -n "${AMPLIFY_APP_ID}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context amplifyAppId=${AMPLIFY_APP_ID}"
+          fi
+          cdk deploy "${TARGET_STACK}" --require-approval never ${CONTEXT_ARGS}
+
+      - name: Read backend outputs
+        id: stack
+        run: |
+          TARGET_STACK="${STACK_NAME:-AskUSDA-Backend}"
+          echo "websocket_url=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`WebSocketUrl`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+          echo "admin_api_url=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`AdminApiUrl`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+          echo "cognito_user_pool_id=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`AdminUserPoolId`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+          echo "cognito_client_id=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`AdminUserPoolClientId`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+
+      - name: Install frontend dependencies
+        working-directory: CIC-AskUSDA-main/frontend
+        run: npm ci
+
+      - name: Build frontend static output
+        working-directory: CIC-AskUSDA-main/frontend
+        run: |
+          echo "NEXT_PUBLIC_WEBSOCKET_URL=${{ steps.stack.outputs.websocket_url }}" > .env.local
+          echo "NEXT_PUBLIC_ADMIN_API_URL=${{ steps.stack.outputs.admin_api_url }}" >> .env.local
+          echo "NEXT_PUBLIC_COGNITO_USER_POOL_ID=${{ steps.stack.outputs.cognito_user_pool_id }}" >> .env.local
+          echo "NEXT_PUBLIC_COGNITO_CLIENT_ID=${{ steps.stack.outputs.cognito_client_id }}" >> .env.local
+          echo "NEXT_PUBLIC_AWS_REGION=${AWS_REGION}" >> .env.local
+          npm run build
+          if [ ! -d out ]; then
+            echo "Next.js static export folder 'out' was not created. Ensure next.config.ts sets output: 'export'."
+            exit 1
+          fi
+          cd out && zip -r build.zip .
+
+      - name: Deploy frontend to Amplify
+        run: |
+          if [ -z "${AMPLIFY_APP_ID}" ]; then
+            echo "Missing repo variable AMPLIFY_APP_ID"
+            exit 1
+          fi
+
+          BRANCH="${DEPLOY_BRANCH:-main}"
+          aws amplify create-deployment --app-id "${AMPLIFY_APP_ID}" --branch-name "${BRANCH}" --region "${AWS_REGION}" --output json > deployment_response.json
+          UPLOAD_URL=$(node -e "const d=require('./deployment_response.json'); process.stdout.write(d.zipUploadUrl)")
+          JOB_ID=$(node -e "const d=require('./deployment_response.json'); process.stdout.write(d.jobId)")
+          curl -s -X PUT -T CIC-AskUSDA-main/frontend/out/build.zip "${UPLOAD_URL}" > /dev/null
+          aws amplify start-deployment --app-id "${AMPLIFY_APP_ID}" --branch-name "${BRANCH}" --job-id "${JOB_ID}" --region "${AWS_REGION}"
