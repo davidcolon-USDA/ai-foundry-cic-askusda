@@ -1,0 +1,25 @@
+{
+  "region": "us-east-1",
+  "user_pool_id": "",
+  "default_temporary_password": "TempPassw0rd!ChangeMe",
+  "users": [
+    {
+      "username": "jane.doe",
+      "email": "jane.doe@example.com",
+      "temporary_password": "",
+      "attributes": {
+        "given_name": "Jane",
+        "family_name": "Doe"
+      }
+    },
+    {
+      "username": "john.smith",
+      "email": "john.smith@example.com",
+      "temporary_password": "",
+      "attributes": {
+        "given_name": "John",
+        "family_name": "Smith"
+      }
+    }
+  ]
+}
