@@ -16,7 +16,7 @@ on:
       PROBE_MESSAGE:
         description: 'Custom chat probe message'
         required: false
-        default: 'What services can AskUSDA help with? Provide two short bullet points.'
+        default: 'How do I apply for farm loans?'
 
 permissions:
   id-token: write
@@ -33,7 +33,7 @@ jobs:
       AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
       DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
       WEBSOCKET_LAMBDA_NAME: ${{ vars.WEBSOCKET_LAMBDA_NAME }}
-      PROBE_MESSAGE: ${{ github.event.inputs.PROBE_MESSAGE || 'What services can AskUSDA help with? Provide two short bullet points.' }}
+      PROBE_MESSAGE: ${{ github.event.inputs.PROBE_MESSAGE }}
 
     steps:
       - name: Configure AWS credentials (OIDC)
