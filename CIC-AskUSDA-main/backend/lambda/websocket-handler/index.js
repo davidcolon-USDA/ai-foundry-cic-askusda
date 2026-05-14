@@ -185,9 +185,13 @@ async function applyGuardrail(text) {
 
 async function retrieveFromKB(query) {
   const startTime = Date.now();
-  const response = await bedrockAgent.send(new RetrieveCommand({
+  const baseParams = {
     knowledgeBaseId: KNOWLEDGE_BASE_ID,
     retrievalQuery: { text: query },
+  };
+
+  const rerankParams = {
+    ...baseParams,
     retrievalConfiguration: {
       vectorSearchConfiguration: {
         numberOfResults: 25,
@@ -201,7 +205,21 @@ async function retrieveFromKB(query) {
         },
       },
     },
-  }));
+  };
+
+  let response;
+  try {
+    response = await bedrockAgent.send(new RetrieveCommand(rerankParams));
+  } catch (error) {
+    const message = (error?.message || '').toLowerCase();
+    const isInvalidRerankModel = error?.name === 'ValidationException' && message.includes('model identifier');
+    if (!isInvalidRerankModel) {
+      throw error;
+    }
+
+    console.warn('[PIPELINE] Rerank model identifier invalid for this region/config; retrying retrieval without reranking');
+    response = await bedrockAgent.send(new RetrieveCommand(baseParams));
+  }
 
   const retrieveMs = Date.now() - startTime;
   console.log(`[PIPELINE] Retrieve: ${retrieveMs}ms, ${(response.retrievalResults || []).length} results`);
