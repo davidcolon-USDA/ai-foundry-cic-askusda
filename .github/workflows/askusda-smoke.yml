@@ -1,11 +1,11 @@
-name: Smoke Test
+name: AskUSDA Smoke Test
 
 on:
   push:
     branches:
       - main
     paths:
-      - ".github/workflows/smoke.yml"
+      - ".github/workflows/askusda-smoke.yml"
   workflow_dispatch:
     inputs:
       PROBE_MESSAGE:
