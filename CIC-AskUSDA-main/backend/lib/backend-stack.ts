@@ -388,9 +388,10 @@ export class USDAChatbotStack extends cdk.Stack {
       resources: [knowledgeBase.attrKnowledgeBaseArn],
     }));
 
+    // Patch note: WebSocket chat runtime uses this Lambda role, so rerank must be granted here as well.
     lambdaRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
-      actions: ['bedrock:InvokeModel'],
+      actions: ['bedrock:InvokeModel', 'bedrock:Rerank'],
       resources: [`arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/amazon.rerank-v1:0`],
     }));
 
