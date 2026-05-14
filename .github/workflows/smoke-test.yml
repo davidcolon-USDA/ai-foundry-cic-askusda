@@ -12,15 +12,6 @@ on:
     types:
       - completed
   workflow_dispatch:
-    inputs:
-      PROBE_MESSAGE:
-        description: 'Custom chat probe message'
-        required: false
-        default: 'How do I apply for farm loans?'
-      EXTRA_PROBE_MESSAGE:
-        description: 'Second chat probe message'
-        required: false
-        default: 'What USDA programs support beginning farmers?'
 
 permissions:
   id-token: write
@@ -36,8 +27,8 @@ jobs:
       AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
       DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
       WEBSOCKET_LAMBDA_NAME: ${{ vars.WEBSOCKET_LAMBDA_NAME }}
-      PROBE_MESSAGE: ${{ github.event.inputs.PROBE_MESSAGE || 'How do I apply for farm loans?' }}
-      EXTRA_PROBE_MESSAGE: ${{ github.event.inputs.EXTRA_PROBE_MESSAGE || 'What USDA programs support beginning farmers?' }}
+      PROBE_MESSAGE: "How do I apply for farm loans?"
+      EXTRA_PROBE_MESSAGE: "What USDA programs support beginning farmers?"
 
     steps:
       - name: Configure AWS credentials (OIDC)
