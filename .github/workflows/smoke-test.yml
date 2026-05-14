@@ -1,18 +1,26 @@
-name: AskUSDA Smoke Test
+name: Smoke Test
 
 on:
   push:
     branches:
       - main
     paths:
-      - ".github/workflows/askusda-smoke.yml"
+      - ".github/workflows/smoke-test.yml"
+  workflow_run:
+    workflows:
+      - "Deploy Application"
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       PROBE_MESSAGE:
         description: 'Custom chat probe message'
         required: false
         default: 'How do I apply for farm loans?'
-        type: string
+      EXTRA_PROBE_MESSAGE:
+        description: 'Second chat probe message'
+        required: false
+        default: 'What USDA programs support beginning farmers?'
 
 permissions:
   id-token: write
@@ -20,32 +28,24 @@ permissions:
 
 jobs:
   smoke-test:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
-      AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}
       STACK_NAME: ${{ vars.STACK_NAME }}
       AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
       AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
       DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
       WEBSOCKET_LAMBDA_NAME: ${{ vars.WEBSOCKET_LAMBDA_NAME }}
       PROBE_MESSAGE: ${{ github.event.inputs.PROBE_MESSAGE || 'How do I apply for farm loans?' }}
+      EXTRA_PROBE_MESSAGE: ${{ github.event.inputs.EXTRA_PROBE_MESSAGE || 'What USDA programs support beginning farmers?' }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Resolve Amplify app id
         run: |
@@ -197,10 +197,15 @@ jobs:
           python -m pip install --quiet websocket-client
 
           export WS_URL
-          export CHAT_SESSION_ID="smoke-$(date +%s)"
-          export CHAT_MESSAGE="$PROBE_MESSAGE"
+          run_probe() {
+            local probe_label="$1"
+            local probe_message="$2"
+            local probe_file="smoke-chat-probe/live-chat-probe-${probe_label}.json"
 
-          python - <<'PY' > smoke-chat-probe/live-chat-probe.json
+            export CHAT_SESSION_ID="smoke-${probe_label}-$(date +%s)"
+            export CHAT_MESSAGE="${probe_message}"
+
+            python - <<'PY' > "${probe_file}"
 import json
 import os
 import ssl
@@ -258,17 +263,21 @@ except Exception as exc:
 print(json.dumps(result, indent=2))
 PY
 
-          echo "Chat-path probe result:"
-          cat smoke-chat-probe/live-chat-probe.json
+            echo "Chat-path probe (${probe_label}) result:"
+            cat "${probe_file}"
 
-          if jq -e '.error != null and .error != ""' smoke-chat-probe/live-chat-probe.json >/dev/null 2>&1; then
-            echo "Chat-path probe failed: websocket returned an error"
-            exit 1
-          fi
+            if jq -e '.error != null and .error != ""' "${probe_file}" >/dev/null 2>&1; then
+              echo "Chat-path probe (${probe_label}) failed: websocket returned an error"
+              exit 1
+            fi
 
-          if jq -e '.finalText == null or .finalText == ""' smoke-chat-probe/live-chat-probe.json >/dev/null 2>&1; then
-            echo "Chat-path probe failed: no final model response was returned"
-            exit 1
-          fi
+            if jq -e '.finalText == null or .finalText == ""' "${probe_file}" >/dev/null 2>&1; then
+              echo "Chat-path probe (${probe_label}) failed: no final model response was returned"
+              exit 1
+            fi
 
-          echo "Chat-path probe completed with a model response"
+            echo "Chat-path probe (${probe_label}) completed with a model response"
+          }
+
+          run_probe "primary" "${PROBE_MESSAGE}"
+          run_probe "secondary" "${EXTRA_PROBE_MESSAGE}"
