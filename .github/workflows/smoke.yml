@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - ".github/workflows/smoke-test.yml"
+      - ".github/workflows/smoke.yml"
   workflow_run:
     workflows:
       - "Deploy Application"
