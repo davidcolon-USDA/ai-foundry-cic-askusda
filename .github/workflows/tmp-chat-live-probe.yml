@@ -1,6 +1,6 @@
 name: TEMP Chat Live Probe
 
-'on':
+on:
   workflow_dispatch:
     inputs:
       aws_region:
