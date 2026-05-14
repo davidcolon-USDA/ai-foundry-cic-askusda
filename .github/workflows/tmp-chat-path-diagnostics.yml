@@ -1,26 +1,22 @@
 name: TEMP Chat Path Diagnostics
 
-on:
+'on':
   workflow_dispatch:
     inputs:
       aws_region:
-        description: AWS region for diagnostics
+        description: AWS region
         required: false
         default: us-east-1
       stack_name:
-        description: Backend CloudFormation stack name
+        description: Backend stack name
         required: false
         default: AskUSDA-Backend
       lambda_name:
-        description: WebSocket Lambda function name
+        description: WebSocket Lambda name
         required: false
         default: AskUSDA-WebSocketHandler
-      amplify_app_id:
-        description: Amplify App ID override (optional)
-        required: false
-        default: ""
       deploy_branch:
-        description: Amplify branch name to inspect
+        description: Amplify branch
         required: false
         default: main
 
@@ -29,187 +25,47 @@ permissions:
   contents: read
 
 jobs:
-  diagnose-chat-path:
+  diagnose:
     runs-on: ubuntu-latest
-    env:
-      AWS_REGION: ${{ github.event.inputs.aws_region }}
-      STACK_NAME: ${{ github.event.inputs.stack_name }}
-      LAMBDA_NAME: ${{ github.event.inputs.lambda_name }}
-      AMPLIFY_APP_ID_INPUT: ${{ github.event.inputs.amplify_app_id }}
-      AMPLIFY_APP_ID_VAR: ${{ vars.AMPLIFY_APP_ID }}
-      DEPLOY_BRANCH: ${{ github.event.inputs.deploy_branch }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ github.event.inputs.aws_region }}
 
-      - name: Run chat-path diagnostics
+      - name: Collect diagnostics
         shell: bash
         run: |
           set -euo pipefail
+          REGION='${{ github.event.inputs.aws_region }}'
+          STACK='${{ github.event.inputs.stack_name }}'
+          LAMBDA='${{ github.event.inputs.lambda_name }}'
+          BRANCH='${{ github.event.inputs.deploy_branch }}'
+          APP_ID='${{ vars.AMPLIFY_APP_ID }}'
 
           mkdir -p diagnostics
+          aws sts get-caller-identity --output json > diagnostics/sts-identity.json
+          aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" --query 'Stacks[0].Outputs' --output json > diagnostics/stack-outputs.json
+          aws lambda get-function-configuration --function-name "$LAMBDA" --region "$REGION" --output json > diagnostics/lambda-config.json
 
-          echo "== Identity =="
-          aws sts get-caller-identity --output json | tee diagnostics/sts-identity.json
+          printf '%s' '{"requestContext":{"routeKey":"sendMessage","connectionId":"diag-connection"},"body":"{\"action\":\"sendMessage\",\"message\":\"diagnostics probe\",\"sessionId\":\"diag\"}"}' > diagnostics/invoke-event.json
+          aws lambda invoke --function-name "$LAMBDA" --region "$REGION" --payload fileb://diagnostics/invoke-event.json --cli-binary-format raw-in-base64-out --log-type Tail diagnostics/lambda-invoke-response.json --output json > diagnostics/lambda-invoke-meta.json || true
+          jq -r '.LogResult // empty' diagnostics/lambda-invoke-meta.json | base64 -d > diagnostics/lambda-invoke-tail.log || true
 
-          echo
-          echo "== Stack outputs =="
-          aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
-            --region "${AWS_REGION}" \
-            --query 'Stacks[0].Outputs' \
-            --output json > diagnostics/stack-outputs.json
+          START_MS="$(( ($(date +%s) - 10800) * 1000 ))"
+          aws logs filter-log-events --log-group-name "/aws/lambda/$LAMBDA" --start-time "$START_MS" --region "$REGION" --output json > diagnostics/lambda-logs-last3h.json || true
 
-          STACK_WEBSOCKET_URL="$(jq -r '.[] | select(.OutputKey=="WebSocketUrl") | .OutputValue' diagnostics/stack-outputs.json | head -n1)"
-          STACK_ADMIN_API_URL="$(jq -r '.[] | select(.OutputKey=="AdminApiUrl") | .OutputValue' diagnostics/stack-outputs.json | head -n1)"
-          echo "Stack WebSocketUrl: ${STACK_WEBSOCKET_URL:-<none>}"
-          echo "Stack AdminApiUrl: ${STACK_ADMIN_API_URL:-<none>}"
-
-          echo
-          echo "== Lambda configuration =="
-          aws lambda get-function-configuration \
-            --function-name "${LAMBDA_NAME}" \
-            --region "${AWS_REGION}" \
-            --output json > diagnostics/lambda-config.json
-
-          jq '.Environment.Variables | {
-            WEBSOCKET_ENDPOINT,
-            BEDROCK_MODEL_ID,
-            KNOWLEDGE_BASE_ID,
-            AWS_ACCOUNT_ID,
-            AWS_REGION,
-            CRAWLER_REGION,
-            GUARDRAIL_ID,
-            GUARDRAIL_VERSION
-          }' diagnostics/lambda-config.json > diagnostics/lambda-env-selected.json
-
-          echo
-          echo "== Synthetic Lambda invoke (sendMessage) =="
-          cat > diagnostics/invoke-event.json <<'EOF'
-          {
-            "requestContext": {
-              "routeKey": "sendMessage",
-              "connectionId": "diag-connection-id"
-            },
-            "body": "{\"action\":\"sendMessage\",\"message\":\"Diagnostics probe: respond with one sentence.\",\"sessionId\":\"diag-session\"}"
-          }
-          EOF
-
-          aws lambda invoke \
-            --function-name "${LAMBDA_NAME}" \
-            --region "${AWS_REGION}" \
-            --payload fileb://diagnostics/invoke-event.json \
-            --cli-binary-format raw-in-base64-out \
-            --log-type Tail \
-            diagnostics/lambda-invoke-response.json \
-            --output json > diagnostics/lambda-invoke-meta.json || true
-
-          if jq -e '.LogResult' diagnostics/lambda-invoke-meta.json >/dev/null 2>&1; then
-            jq -r '.LogResult' diagnostics/lambda-invoke-meta.json | base64 -d > diagnostics/lambda-invoke-tail.log || true
-          fi
-
-          echo
-          echo "== CloudWatch logs (last 3h, unfiltered) =="
-          START_MS="$(( ($(date +%s) - 10800 ) * 1000 ))"
-          aws logs filter-log-events \
-            --log-group-name "/aws/lambda/${LAMBDA_NAME}" \
-            --start-time "${START_MS}" \
-            --region "${AWS_REGION}" \
-            --output json > diagnostics/lambda-logs-last3h.json || true
-
-          jq '{events: (.events // [] | map({timestamp, message}) | sort_by(.timestamp) | reverse | .[:300])}' \
-            diagnostics/lambda-logs-last3h.json > diagnostics/lambda-logs-last3h-sample.json || true
-
-          echo
-          echo "== Amplify branch/live frontend check =="
-          AMPLIFY_APP_ID="${AMPLIFY_APP_ID_INPUT}"
-          if [[ -z "${AMPLIFY_APP_ID}" ]]; then
-            AMPLIFY_APP_ID="${AMPLIFY_APP_ID_VAR:-}"
-          fi
-
-          if [[ -n "${AMPLIFY_APP_ID}" ]]; then
-            aws amplify get-branch \
-              --app-id "${AMPLIFY_APP_ID}" \
-              --branch-name "${DEPLOY_BRANCH}" \
-              --region "${AWS_REGION}" \
-              --output json > diagnostics/amplify-branch.json || true
-
+          if [[ -n "$APP_ID" ]]; then
+            aws amplify get-branch --app-id "$APP_ID" --branch-name "$BRANCH" --region "$REGION" --output json > diagnostics/amplify-branch.json || true
             WEB_URL="$(jq -r '.branch.webUrl // empty' diagnostics/amplify-branch.json 2>/dev/null || true)"
-            echo "Amplify webUrl: ${WEB_URL:-<none>}"
-
-            if [[ -n "${WEB_URL}" ]]; then
-              curl -sS "${WEB_URL}" > diagnostics/frontend-index.html || true
-
-              python3 - <<'PY'
-import json
-import re
-from pathlib import Path
-
-root = Path("diagnostics")
-index = root / "frontend-index.html"
-urls = set()
-chunks = []
-
-if index.exists():
-    html = index.read_text(encoding="utf-8", errors="ignore")
-    chunks = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', html)
-
-for chunk in chunks[:40]:
-    if chunk.startswith("http"):
-        urls.add(chunk)
-    else:
-        urls.add("PLACEHOLDER" + chunk)
-
-(root / "frontend-script-srcs.json").write_text(json.dumps(sorted(urls), indent=2), encoding="utf-8")
-PY
-
-              BASE="${WEB_URL%/}"
-              mkdir -p diagnostics/frontend-chunks
-              i=0
-              while IFS= read -r u; do
-                [[ -n "${u}" ]] || continue
-                if [[ "${u}" == PLACEHOLDER* ]]; then
-                  path="${u#PLACEHOLDER}"
-                  if [[ "${path}" == /* ]]; then
-                    full="${BASE}${path}"
-                  else
-                    full="${BASE}/${path}"
-                  fi
-                else
-                  full="${u}"
-                fi
-                i=$((i+1))
-                out="diagnostics/frontend-chunks/chunk-${i}.js"
-                curl -sS "${full}" -o "${out}" || true
-              done < <(jq -r '.[]' diagnostics/frontend-script-srcs.json 2>/dev/null || true)
-
-              grep -RhoE 'wss://[^"\047 ]+|https://[^"\047 ]+execute-api\.[^"\047 ]+' diagnostics/frontend-chunks diagnostics/frontend-index.html \
-                | sort -u > diagnostics/frontend-endpoints-discovered.txt || true
+            if [[ -n "$WEB_URL" ]]; then
+              curl -sS "$WEB_URL" > diagnostics/frontend-index.html || true
+              grep -Eo 'wss://[^" ]+|https://[^" ]+execute-api\.[^" ]+' diagnostics/frontend-index.html | sort -u > diagnostics/frontend-endpoints.txt || true
             fi
-          else
-            echo "No Amplify app id provided/found; skipping frontend web inspection." | tee diagnostics/amplify-skip.txt
           fi
 
-          echo
-          echo "== Summary =="
-          cat > diagnostics/summary.txt <<EOF
-          Stack name: ${STACK_NAME}
-          Region: ${AWS_REGION}
-          Lambda: ${LAMBDA_NAME}
-          Stack WebSocketUrl: ${STACK_WEBSOCKET_URL:-<none>}
-          Stack AdminApiUrl: ${STACK_ADMIN_API_URL:-<none>}
-          Amplify app id used: ${AMPLIFY_APP_ID:-<none>}
-          Amplify branch: ${DEPLOY_BRANCH}
-          EOF
-
-      - name: Upload diagnostics artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: chat-path-diagnostics
