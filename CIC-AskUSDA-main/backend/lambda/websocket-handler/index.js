@@ -254,28 +254,27 @@ async function buildCitations(results) {
 
 // ==================== Streaming Generation ====================
 
-async function streamResponse(connectionId, userMessage, context) {
-  const modelArn = `arn:aws:bedrock:${AWS_REGION}:${AWS_ACCOUNT_ID}:inference-profile/us.amazon.nova-pro-v1:0`;
+function getModelIdCandidates() {
+  const profileId = 'us.amazon.nova-pro-v1:0';
+  const candidates = [
+    BEDROCK_MODEL_ID,
+    profileId,
+    AWS_REGION ? `arn:aws:bedrock:${AWS_REGION}::inference-profile/${profileId}` : undefined,
+    (AWS_REGION && AWS_ACCOUNT_ID)
+      ? `arn:aws:bedrock:${AWS_REGION}:${AWS_ACCOUNT_ID}:inference-profile/${profileId}`
+      : undefined,
+    'amazon.nova-pro-v1:0',
+  ].filter(Boolean);
 
-  let systemPrompt = SYSTEM_PROMPT;
-  if (context) {
-    systemPrompt += `\n\nUse the following information from USDA sources to answer the user's question. If the context doesn't contain relevant information, say so clearly.\n\nContext:\n${context}`;
-  }
+  return [...new Set(candidates)];
+}
 
-  const commandParams = {
-    modelId: modelArn,
-    system: [{ text: systemPrompt }],
-    messages: [{ role: 'user', content: [{ text: userMessage }] }],
-    inferenceConfig: { maxTokens: 1024, temperature: 0.3, topP: 0.9 },
-  };
+function isInvalidModelIdentifierError(error) {
+  const message = (error?.message || '').toLowerCase();
+  return error?.name === 'ValidationException' && message.includes('model identifier');
+}
 
-  if (GUARDRAIL_ID && GUARDRAIL_VERSION) {
-    commandParams.guardrailConfig = {
-      guardrailIdentifier: GUARDRAIL_ID,
-      guardrailVersion: GUARDRAIL_VERSION,
-    };
-  }
-
+async function streamFromModel(connectionId, commandParams) {
   const response = await bedrockRuntime.send(new ConverseStreamCommand(commandParams));
 
   let fullResponse = '';
@@ -311,6 +310,47 @@ async function streamResponse(connectionId, userMessage, context) {
 
   await sendToClient(connectionId, { type: 'stream', chunk: '', isComplete: true });
   return { text: fullResponse, blocked };
+}
+
+async function streamResponse(connectionId, userMessage, context) {
+  let systemPrompt = SYSTEM_PROMPT;
+  if (context) {
+    systemPrompt += `\n\nUse the following information from USDA sources to answer the user's question. If the context doesn't contain relevant information, say so clearly.\n\nContext:\n${context}`;
+  }
+
+  const modelCandidates = getModelIdCandidates();
+  let lastError;
+
+  for (let i = 0; i < modelCandidates.length; i++) {
+    const modelId = modelCandidates[i];
+    const commandParams = {
+      modelId,
+      system: [{ text: systemPrompt }],
+      messages: [{ role: 'user', content: [{ text: userMessage }] }],
+      inferenceConfig: { maxTokens: 1024, temperature: 0.3, topP: 0.9 },
+    };
+
+    if (GUARDRAIL_ID && GUARDRAIL_VERSION) {
+      commandParams.guardrailConfig = {
+        guardrailIdentifier: GUARDRAIL_ID,
+        guardrailVersion: GUARDRAIL_VERSION,
+      };
+    }
+
+    try {
+      console.log(`[PIPELINE] Trying modelId: ${modelId}`);
+      return await streamFromModel(connectionId, commandParams);
+    } catch (error) {
+      lastError = error;
+      if (isInvalidModelIdentifierError(error) && i < modelCandidates.length - 1) {
+        console.warn(`[PIPELINE] Invalid model identifier rejected by Bedrock, falling back from ${modelId}`);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError || new Error('No valid Bedrock model identifier available');
 }
 
 // ==================== Escalation ====================
