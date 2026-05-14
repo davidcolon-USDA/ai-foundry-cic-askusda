@@ -27,6 +27,7 @@ jobs:
       AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
       AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
       DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
+      WEBSOCKET_LAMBDA_NAME: ${{ vars.WEBSOCKET_LAMBDA_NAME }}
 
     steps:
       - name: Configure AWS credentials (OIDC)
@@ -165,3 +166,36 @@ jobs:
             echo "Admin API smoke test failed on /escalations"
             exit 1
           fi
+
+      - name: Smoke test websocket chat path
+        run: |
+          set -euo pipefail
+          TARGET_LAMBDA="${WEBSOCKET_LAMBDA_NAME:-AskUSDA-WebSocketHandler}"
+          mkdir -p smoke-chat-probe
+
+          printf '%s' '{"requestContext":{"routeKey":"sendMessage","connectionId":"smoke-connection"},"body":"{\"action\":\"sendMessage\",\"message\":\"smoke chat path probe\",\"sessionId\":\"smoke\"}"}' > smoke-chat-probe/invoke-event.json
+
+          aws lambda invoke \
+            --function-name "${TARGET_LAMBDA}" \
+            --region "${AWS_REGION}" \
+            --payload fileb://smoke-chat-probe/invoke-event.json \
+            --cli-binary-format raw-in-base64-out \
+            --log-type Tail \
+            smoke-chat-probe/lambda-invoke-response.json \
+            --output json > smoke-chat-probe/lambda-invoke-meta.json
+
+          jq -r '.LogResult // empty' smoke-chat-probe/lambda-invoke-meta.json | base64 -d > smoke-chat-probe/lambda-tail.log || true
+
+          if jq -e '.FunctionError? != null' smoke-chat-probe/lambda-invoke-meta.json >/dev/null 2>&1; then
+            echo "Chat-path probe failed: Lambda returned FunctionError"
+            cat smoke-chat-probe/lambda-invoke-meta.json
+            exit 1
+          fi
+
+          if grep -Eiq 'AccessDenied|not authorized to perform|bedrock:Rerank' smoke-chat-probe/lambda-tail.log; then
+            echo "Chat-path probe failed: authorization error signature detected in Lambda logs"
+            cat smoke-chat-probe/lambda-tail.log
+            exit 1
+          fi
+
+          echo "Chat-path probe completed without authorization error signatures"
