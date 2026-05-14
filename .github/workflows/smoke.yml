@@ -6,11 +6,6 @@ on:
       - main
     paths:
       - ".github/workflows/smoke.yml"
-  workflow_run:
-    workflows:
-      - "Deploy Application"
-    types:
-      - completed
   workflow_dispatch:
     inputs:
       PROBE_MESSAGE:
@@ -24,7 +19,6 @@ permissions:
 
 jobs:
   smoke-test:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
