@@ -19,6 +19,10 @@ name: TEMP Chat Path Diagnostics
         description: Amplify branch
         required: false
         default: main
+      chat_message:
+        description: Chat probe message
+        required: false
+        default: How do I apply for farm loans?
 
 permissions:
   id-token: write
@@ -42,6 +46,7 @@ jobs:
           STACK='${{ github.event.inputs.stack_name }}'
           LAMBDA='${{ github.event.inputs.lambda_name }}'
           BRANCH='${{ github.event.inputs.deploy_branch }}'
+          CHAT_MESSAGE='${{ github.event.inputs.chat_message }}'
           APP_ID='${{ vars.AMPLIFY_APP_ID }}'
 
           mkdir -p diagnostics
@@ -124,7 +129,7 @@ jobs:
             python -m pip install --quiet websocket-client
             export WS_URL
             export CHAT_SESSION_ID="diag-live-$(date +%s)"
-            export CHAT_MESSAGE="What services can AskUSDA help with? Provide two bullet points."
+            export CHAT_MESSAGE
 
             python - <<'PY' > diagnostics/live-chat-probe.json
 import json
@@ -185,6 +190,8 @@ print(json.dumps(result, indent=2))
 PY
 
             echo "$CHAT_SESSION_ID" > diagnostics/live-chat-session-id.txt
+            echo '--- Live chat probe result ---'
+            jq '{sessionId, message, finalText, error}' diagnostics/live-chat-probe.json
           else
             echo "WebSocketUrl missing from stack outputs" > diagnostics/live-chat-probe-skipped.txt
           fi
@@ -196,6 +203,8 @@ PY
             CHAT_SESSION_ID="$(cat diagnostics/live-chat-session-id.txt)"
             jq --arg sid "$CHAT_SESSION_ID" '.events | map(select((.message // "") | contains($sid)))' diagnostics/lambda-logs-last3h.json > diagnostics/lambda-logs-live-session.json || true
             jq '[.[] | select((.message // "") | test("AccessDenied|AccessDeniedException|not authorized|bedrock|model|inference"; "i"))]' diagnostics/lambda-logs-live-session.json > diagnostics/lambda-logs-live-session-auth-errors.json || true
+            echo '--- Live session error lines ---'
+            jq -r '.[]?.message // empty' diagnostics/lambda-logs-live-session-auth-errors.json || true
           fi
 
           if [[ -n "$APP_ID" ]]; then
