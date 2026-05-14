@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - ".github/workflows/tmp-farm-loans-live-probe.yml"
+      - ".github/scripts/tmp-farm-loans-trigger.txt"
   workflow_dispatch:
 
 permissions:
