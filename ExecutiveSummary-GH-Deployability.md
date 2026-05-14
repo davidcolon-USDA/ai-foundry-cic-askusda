@@ -22,6 +22,7 @@ The goal was to make the original codebase reliably deployable through GitHub Ac
 6. A manual initial-crawl GitHub workflow was added for first-time or ad hoc knowledge-base population.
 7. A nightly delta crawl scheduler was added and gated so it only fires when prior crawled content exists.
 8. Crawler launch region alignment was fixed so KBSync ECS launches use the deployed crawler region, resolving `Invalid Region in ARN` failures.
+9. Bedrock Knowledge Base IAM permissions were patched to include `bedrock:Rerank` for the Amazon rerank model ARN, resolving chat-time `AccessDeniedException` failures raised by BedrockAgentRuntime reranking.
 
 ## CI/CD Augmentations Added
 1. Bootstrap automation:
@@ -41,6 +42,13 @@ The goal was to make the original codebase reliably deployable through GitHub Ac
 4. Observability and diagnostics quality:
    - Added clearer test-result messaging for what each smoke check validates.
    - Added explicit network timeout and curl transport error handling so connectivity failures are distinguishable from application responses.
+   - Added crawler-side PDF failure classification and end-of-run failure summaries (including persisted summary fields in job artifacts) to make fetch/transport problems diagnosable.
+
+## Explicit Deviation from Original Code
+The following changes intentionally deviate from original crawler behavior to improve production operability and diagnostics:
+1. Structured failure telemetry now covers both PDF and DOC downloads, including reason-level and domain-level rollups, sampled URLs, and a persisted `download_failure_summary.json` artifact.
+2. Retry behavior now short-circuits for known non-retryable transport classes (for example malformed URL or DNS-resolution failures), and repeated HTTP 403 responses can trigger domain-level early-skip behavior to reduce noisy retries.
+3. Lightweight scraper metrics now distinguish true page failures from non-page skips (for example non-HTML content-type or non-200 response), so operational dashboards do not overstate crawler failure rates.
 
 5. Knowledge refresh controls:
    - Added operator-tunable crawl controls for nightly enablement and scheduled time.

@@ -107,9 +107,11 @@ export class USDAChatbotStack extends cdk.Stack {
       ],
     }));
 
+    // Patch note: Bedrock KB retrieval with reranking requires bedrock:Rerank on the rerank model ARN.
+    // Without this, chat retrieval can fail with AccessDeniedException for BedrockAgentRuntime reranking.
     knowledgeBaseRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
-      actions: ['bedrock:InvokeModel'],
+      actions: ['bedrock:InvokeModel', 'bedrock:Rerank'],
       resources: [`arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/amazon.rerank-v1:0`],
     }));
 
