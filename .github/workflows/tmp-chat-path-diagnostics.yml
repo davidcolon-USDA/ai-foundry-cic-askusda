@@ -32,12 +32,12 @@ jobs:
   diagnose-chat-path:
     runs-on: ubuntu-latest
     env:
-      AWS_REGION: ${{ inputs.aws_region || vars.AWS_REGION }}
-      STACK_NAME: ${{ inputs.stack_name }}
-      LAMBDA_NAME: ${{ inputs.lambda_name }}
-      AMPLIFY_APP_ID_INPUT: ${{ inputs.amplify_app_id }}
+      AWS_REGION: ${{ github.event.inputs.aws_region }}
+      STACK_NAME: ${{ github.event.inputs.stack_name }}
+      LAMBDA_NAME: ${{ github.event.inputs.lambda_name }}
+      AMPLIFY_APP_ID_INPUT: ${{ github.event.inputs.amplify_app_id }}
       AMPLIFY_APP_ID_VAR: ${{ vars.AMPLIFY_APP_ID }}
-      DEPLOY_BRANCH: ${{ inputs.deploy_branch || vars.DEPLOY_BRANCH || 'main' }}
+      DEPLOY_BRANCH: ${{ github.event.inputs.deploy_branch }}
 
     steps:
       - name: Checkout
