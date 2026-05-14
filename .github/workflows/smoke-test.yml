@@ -12,6 +12,11 @@ on:
     types:
       - completed
   workflow_dispatch:
+    inputs:
+      PROBE_MESSAGE:
+        description: 'Custom chat probe message'
+        required: false
+        default: 'What services can AskUSDA help with? Provide two short bullet points.'
 
 permissions:
   id-token: write
@@ -28,6 +33,7 @@ jobs:
       AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
       DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
       WEBSOCKET_LAMBDA_NAME: ${{ vars.WEBSOCKET_LAMBDA_NAME }}
+      PROBE_MESSAGE: ${{ github.event.inputs.PROBE_MESSAGE || 'What services can AskUSDA help with? Provide two short bullet points.' }}
 
     steps:
       - name: Configure AWS credentials (OIDC)
@@ -173,7 +179,9 @@ jobs:
           TARGET_LAMBDA="${WEBSOCKET_LAMBDA_NAME:-AskUSDA-WebSocketHandler}"
           mkdir -p smoke-chat-probe
 
-          printf '%s' '{"requestContext":{"routeKey":"sendMessage","connectionId":"smoke-connection"},"body":"{\"action\":\"sendMessage\",\"message\":\"smoke chat path probe\",\"sessionId\":\"smoke\"}"}' > smoke-chat-probe/invoke-event.json
+          # Use the custom probe message if provided
+          PROBE_MSG_ESC=$(printf '%s' "$PROBE_MESSAGE" | jq -aRs .)
+          printf '%s' '{"requestContext":{"routeKey":"sendMessage","connectionId":"smoke-connection"},"body":'{"action":"sendMessage","message":'${PROBE_MSG_ESC}',"sessionId":"smoke"}'}' > smoke-chat-probe/invoke-event.json
 
           aws lambda invoke \
             --function-name "${TARGET_LAMBDA}" \
