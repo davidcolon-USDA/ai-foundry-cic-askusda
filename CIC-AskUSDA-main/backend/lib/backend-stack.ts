@@ -112,7 +112,7 @@ export class USDAChatbotStack extends cdk.Stack {
     knowledgeBaseRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['bedrock:InvokeModel', 'bedrock:Rerank'],
-      resources: [`arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/amazon.rerank-v1:0`],
+      resources: ['*'],
     }));
 
     knowledgeBaseRole.addToPolicy(new iam.PolicyStatement({
@@ -391,8 +391,10 @@ export class USDAChatbotStack extends cdk.Stack {
     // Patch note: WebSocket chat runtime uses this Lambda role, so rerank must be granted here as well.
     lambdaRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
-      actions: ['bedrock:InvokeModel', 'bedrock:Rerank'],
-      resources: [`arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/amazon.rerank-v1:0`],
+      actions: ['bedrock:Rerank'],
+      resources: [
+        `arn:aws:bedrock:*::foundation-model/amazon.rerank-v1:0`,
+      ],
     }));
 
     // execute-api:ManageConnections is scoped below after WebSocket API creation
