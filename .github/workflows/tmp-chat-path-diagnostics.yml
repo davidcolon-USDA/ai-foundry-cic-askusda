@@ -49,6 +49,71 @@ jobs:
           aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" --query 'Stacks[0].Outputs' --output json > diagnostics/stack-outputs.json
           aws lambda get-function-configuration --function-name "$LAMBDA" --region "$REGION" --output json > diagnostics/lambda-config.json
 
+          echo '--- Step 1: IAM Policy Check ---'
+          aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" --output json > diagnostics/stack.json
+          jq -r '.Stacks[0].Outputs[]?.OutputValue // empty' diagnostics/stack.json | grep -E 'arn:aws:iam::[0-9]+:role/' | sort -u > diagnostics/stack-role-arns.txt || true
+          while IFS= read -r role_arn; do
+            role_name="${role_arn##*/}"
+            echo "Checking role: $role_name"
+            aws iam get-role --role-name "$role_name" --output json > "diagnostics/role-${role_name}.json" || true
+            aws iam list-attached-role-policies --role-name "$role_name" --output json > "diagnostics/role-${role_name}-attached-policies.json" || true
+            aws iam list-role-policies --role-name "$role_name" --output json > "diagnostics/role-${role_name}-inline-policies.json" || true
+
+            for policy_arn in $(jq -r '.AttachedPolicies[]?.PolicyArn // empty' "diagnostics/role-${role_name}-attached-policies.json" 2>/dev/null || true); do
+              safe_name="${policy_arn##*/}"
+              aws iam get-policy --policy-arn "$policy_arn" --output json > "diagnostics/policy-${role_name}-${safe_name}.json" || true
+              ver_id="$(jq -r '.Policy.DefaultVersionId // empty' "diagnostics/policy-${role_name}-${safe_name}.json" 2>/dev/null || true)"
+              if [[ -n "$ver_id" ]]; then
+                aws iam get-policy-version --policy-arn "$policy_arn" --version-id "$ver_id" --output json > "diagnostics/policy-${role_name}-${safe_name}-version.json" || true
+                echo "--- Policy $policy_arn Statements ---"
+                jq '.PolicyVersion.Document.Statement' "diagnostics/policy-${role_name}-${safe_name}-version.json" || true
+              fi
+            done
+
+            for inline_policy in $(jq -r '.PolicyNames[]? // empty' "diagnostics/role-${role_name}-inline-policies.json" 2>/dev/null || true); do
+              echo "--- Inline Policy: $inline_policy ($role_name) ---"
+              aws iam get-role-policy --role-name "$role_name" --policy-name "$inline_policy" --output json > "diagnostics/role-${role_name}-inline-${inline_policy}.json" || true
+              jq '.PolicyDocument.Statement' "diagnostics/role-${role_name}-inline-${inline_policy}.json" || true
+            done
+          done < diagnostics/stack-role-arns.txt
+
+          echo '--- Step 2: CDK Deploy Status ---'
+          aws cloudformation describe-stack-events --stack-name "$STACK" --region "$REGION" --output json > diagnostics/stack-events.json || true
+          jq '.StackEvents[] | select((.ResourceStatus // "") | test("FAILED|ROLLBACK"))' diagnostics/stack-events.json > diagnostics/stack-failures.json || true
+
+          echo '--- Step 3: Lambda Role Attachment ---'
+          jq '.Role' diagnostics/lambda-config.json
+          LAMBDA_ROLE="$(jq -r '.Role // empty' diagnostics/lambda-config.json | awk -F'/' '{print $NF}')"
+          aws iam list-attached-role-policies --role-name "$LAMBDA_ROLE" --output json > diagnostics/lambda-role-attached-policies.json || true
+          aws iam list-role-policies --role-name "$LAMBDA_ROLE" --output json > diagnostics/lambda-role-inline-policies.json || true
+          : > diagnostics/lambda-policy-summary.txt
+          for policy_arn in $(jq -r '.AttachedPolicies[]?.PolicyArn // empty' diagnostics/lambda-role-attached-policies.json 2>/dev/null || true); do
+            safe_name="${policy_arn##*/}"
+            echo "AttachedPolicyArn=$policy_arn" | tee -a diagnostics/lambda-policy-summary.txt
+            aws iam get-policy --policy-arn "$policy_arn" --output json > "diagnostics/lambda-policy-${safe_name}.json" || true
+            ver_id="$(jq -r '.Policy.DefaultVersionId // empty' "diagnostics/lambda-policy-${safe_name}.json" 2>/dev/null || true)"
+            if [[ -n "$ver_id" ]]; then
+              aws iam get-policy-version --policy-arn "$policy_arn" --version-id "$ver_id" --output json > "diagnostics/lambda-policy-${safe_name}-version.json" || true
+              jq '.PolicyVersion.Document.Statement' "diagnostics/lambda-policy-${safe_name}-version.json" > "diagnostics/lambda-policy-${safe_name}-statements.json" || true
+              if jq -e '.PolicyVersion.Document.Statement | tostring | contains("bedrock:Rerank")' "diagnostics/lambda-policy-${safe_name}-version.json" >/dev/null 2>&1; then
+                echo "bedrock:Rerank found in $policy_arn" | tee -a diagnostics/lambda-policy-summary.txt
+              else
+                echo "bedrock:Rerank NOT found in $policy_arn" | tee -a diagnostics/lambda-policy-summary.txt
+              fi
+            fi
+          done
+
+          for inline_policy in $(jq -r '.PolicyNames[]? // empty' diagnostics/lambda-role-inline-policies.json 2>/dev/null || true); do
+            echo "InlinePolicyName=$inline_policy" | tee -a diagnostics/lambda-policy-summary.txt
+            aws iam get-role-policy --role-name "$LAMBDA_ROLE" --policy-name "$inline_policy" --output json > "diagnostics/lambda-inline-policy-${inline_policy}.json" || true
+            jq '.PolicyDocument.Statement' "diagnostics/lambda-inline-policy-${inline_policy}.json" > "diagnostics/lambda-inline-policy-${inline_policy}-statements.json" || true
+            if jq -e '.PolicyDocument.Statement | tostring | contains("bedrock:Rerank")' "diagnostics/lambda-inline-policy-${inline_policy}.json" >/dev/null 2>&1; then
+              echo "bedrock:Rerank found in inline policy $inline_policy" | tee -a diagnostics/lambda-policy-summary.txt
+            else
+              echo "bedrock:Rerank NOT found in inline policy $inline_policy" | tee -a diagnostics/lambda-policy-summary.txt
+            fi
+          done
+
           printf '%s' '{"requestContext":{"routeKey":"sendMessage","connectionId":"diag-connection"},"body":"{\"action\":\"sendMessage\",\"message\":\"diagnostics probe\",\"sessionId\":\"diag\"}"}' > diagnostics/invoke-event.json
           aws lambda invoke --function-name "$LAMBDA" --region "$REGION" --payload fileb://diagnostics/invoke-event.json --cli-binary-format raw-in-base64-out --log-type Tail diagnostics/lambda-invoke-response.json --output json > diagnostics/lambda-invoke-meta.json || true
           jq -r '.LogResult // empty' diagnostics/lambda-invoke-meta.json | base64 -d > diagnostics/lambda-invoke-tail.log || true
