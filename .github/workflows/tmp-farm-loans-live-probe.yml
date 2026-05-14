@@ -1,6 +1,11 @@
 name: TEMP Farm Loans Live Probe
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/tmp-farm-loans-live-probe.yml"
   workflow_dispatch:
 
 permissions:
