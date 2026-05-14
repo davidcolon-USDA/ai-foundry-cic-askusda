@@ -180,8 +180,7 @@ jobs:
           mkdir -p smoke-chat-probe
 
           # Use the custom probe message if provided
-          PROBE_MSG_ESC=$(printf '%s' "$PROBE_MESSAGE" | jq -aRs .)
-          printf '%s' '{"requestContext":{"routeKey":"sendMessage","connectionId":"smoke-connection"},"body":'{"action":"sendMessage","message":'${PROBE_MSG_ESC}',"sessionId":"smoke"}'}' > smoke-chat-probe/invoke-event.json
+          jq -nc --arg message "$PROBE_MESSAGE" '{requestContext:{routeKey:"sendMessage",connectionId:"smoke-connection"},body:({action:"sendMessage",message:$message,sessionId:"smoke"}|tojson)}' > smoke-chat-probe/invoke-event.json
 
           aws lambda invoke \
             --function-name "${TARGET_LAMBDA}" \
