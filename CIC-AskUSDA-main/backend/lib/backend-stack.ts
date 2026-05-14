@@ -361,6 +361,10 @@ export class USDAChatbotStack extends cdk.Stack {
       ],
     }));
 
+    // These permissions are required for the WebSocket Lambda to invoke Amazon Bedrock models (Nova Pro, Titan Embed, etc.)
+    // and to support streaming and inference profile access for chat functionality.
+    // If you see 'Access denied' errors in chat, ensure these ARNs and actions are correct and match your deployed models.
+    
     lambdaRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
