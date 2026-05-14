@@ -192,6 +192,8 @@ jobs:
             --output json > smoke-chat-probe/lambda-invoke-meta.json
 
           jq -r '.LogResult // empty' smoke-chat-probe/lambda-invoke-meta.json | base64 -d > smoke-chat-probe/lambda-tail.log || true
+          echo "Chat-path probe Lambda response:"
+          cat smoke-chat-probe/lambda-invoke-response.json
 
           if jq -e '.FunctionError? != null' smoke-chat-probe/lambda-invoke-meta.json >/dev/null 2>&1; then
             echo "Chat-path probe failed: Lambda returned FunctionError"
