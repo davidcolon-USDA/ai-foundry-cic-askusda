@@ -176,35 +176,94 @@ jobs:
       - name: Smoke test websocket chat path
         run: |
           set -euo pipefail
-          TARGET_LAMBDA="${WEBSOCKET_LAMBDA_NAME:-AskUSDA-WebSocketHandler}"
           mkdir -p smoke-chat-probe
 
-          # Use the custom probe message if provided
-          jq -nc --arg message "$PROBE_MESSAGE" '{requestContext:{routeKey:"sendMessage",connectionId:"smoke-connection"},body:({action:"sendMessage",message:$message,sessionId:"smoke"}|tojson)}' > smoke-chat-probe/invoke-event.json
+          WS_URL=$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_NAME:-AskUSDA-Backend}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`WebSocketUrl`].OutputValue' \
+            --output text \
+            --region "${AWS_REGION}")
 
-          aws lambda invoke \
-            --function-name "${TARGET_LAMBDA}" \
-            --region "${AWS_REGION}" \
-            --payload fileb://smoke-chat-probe/invoke-event.json \
-            --cli-binary-format raw-in-base64-out \
-            --log-type Tail \
-            smoke-chat-probe/lambda-invoke-response.json \
-            --output json > smoke-chat-probe/lambda-invoke-meta.json
-
-          jq -r '.LogResult // empty' smoke-chat-probe/lambda-invoke-meta.json | base64 -d > smoke-chat-probe/lambda-tail.log || true
-          echo "Chat-path probe Lambda response:"
-          cat smoke-chat-probe/lambda-invoke-response.json
-
-          if jq -e '.FunctionError? != null' smoke-chat-probe/lambda-invoke-meta.json >/dev/null 2>&1; then
-            echo "Chat-path probe failed: Lambda returned FunctionError"
-            cat smoke-chat-probe/lambda-invoke-meta.json
+          if [ -z "${WS_URL}" ] || [ "${WS_URL}" = "None" ]; then
+            echo "Smoke test websocket chat path failed: unable to resolve WebSocketUrl"
             exit 1
           fi
 
-          if grep -Eiq 'AccessDenied|not authorized to perform|bedrock:Rerank' smoke-chat-probe/lambda-tail.log; then
-            echo "Chat-path probe failed: authorization error signature detected in Lambda logs"
-            cat smoke-chat-probe/lambda-tail.log
+          python -m pip install --quiet websocket-client
+
+          export WS_URL
+          export CHAT_SESSION_ID="smoke-$(date +%s)"
+          export CHAT_MESSAGE="$PROBE_MESSAGE"
+
+          python - <<'PY' > smoke-chat-probe/live-chat-probe.json
+import json
+import os
+import ssl
+import time
+
+import websocket
+
+url = os.environ["WS_URL"]
+session_id = os.environ["CHAT_SESSION_ID"]
+message = os.environ["CHAT_MESSAGE"]
+
+frames = []
+result = {
+    "sessionId": session_id,
+    "websocketUrl": url,
+    "message": message,
+    "finalText": None,
+    "error": None,
+    "frames": frames,
+}
+
+try:
+    ws = websocket.create_connection(url, timeout=60, sslopt={"cert_reqs": ssl.CERT_REQUIRED})
+    ws.settimeout(60)
+    ws.send(json.dumps({"action": "sendMessage", "message": message, "sessionId": session_id}))
+
+    stream_text = ""
+    started = time.time()
+    while time.time() - started < 90:
+        raw = ws.recv()
+        frames.append(raw)
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+
+        msg_type = data.get("type")
+        if msg_type == "stream":
+            chunk = data.get("chunk") or ""
+            stream_text += chunk
+            if data.get("isComplete") and stream_text:
+                result["finalText"] = stream_text
+                break
+        elif msg_type == "message":
+            result["finalText"] = data.get("message")
+            break
+        elif msg_type == "error":
+            result["error"] = data.get("message") or raw
+            break
+
+    ws.close()
+except Exception as exc:
+    result["error"] = str(exc)
+
+print(json.dumps(result, indent=2))
+PY
+
+          echo "Chat-path probe result:"
+          cat smoke-chat-probe/live-chat-probe.json
+
+          if jq -e '.error != null and .error != ""' smoke-chat-probe/live-chat-probe.json >/dev/null 2>&1; then
+            echo "Chat-path probe failed: websocket returned an error"
             exit 1
           fi
 
-          echo "Chat-path probe completed without authorization error signatures"
+          if jq -e '.finalText == null or .finalText == ""' smoke-chat-probe/live-chat-probe.json >/dev/null 2>&1; then
+            echo "Chat-path probe failed: no final model response was returned"
+            exit 1
+          fi
+
+          echo "Chat-path probe completed with a model response"
