@@ -18,7 +18,7 @@ name: TEMP Chat Live Probe
       probe_message:
         description: Chat question to send
         required: false
-        default: What services can AskUSDA help with? Provide two short bullet points.
+        default: How do I apply for farm loans?
 
 permissions:
   id-token: write
@@ -41,7 +41,7 @@ jobs:
           REGION='${{ github.event.inputs.aws_region }}'
           STACK='${{ github.event.inputs.stack_name }}'
           LAMBDA='${{ github.event.inputs.lambda_name }}'
-          PROBE_MESSAGE='${{ github.event.inputs.probe_message }}'
+          PROBE_MESSAGE='${{ github.event.inputs.probe_message || 'How do I apply for farm loans?' }}'
 
           mkdir -p diagnostics
 
@@ -115,6 +115,9 @@ except Exception as exc:
 print(json.dumps(result, indent=2))
 PY
 
+          echo '--- Live chat probe result ---'
+          jq '{sessionId, message, finalText, error}' diagnostics/live-chat-probe.json
+
           echo "$CHAT_SESSION_ID" > diagnostics/live-chat-session-id.txt
 
           START_MS="$(( ($(date +%s) - 1800) * 1000 ))"
@@ -122,6 +125,8 @@ PY
           CHAT_SESSION_ID="$(cat diagnostics/live-chat-session-id.txt)"
           jq --arg sid "$CHAT_SESSION_ID" '.events | map(select((.message // "") | contains($sid)))' diagnostics/lambda-logs-last30m.json > diagnostics/lambda-logs-live-session.json || true
           jq '[.[] | select((.message // "") | test("AccessDenied|AccessDeniedException|not authorized|bedrock|model|inference"; "i"))]' diagnostics/lambda-logs-live-session.json > diagnostics/lambda-logs-live-session-auth-errors.json || true
+          echo '--- Live session error lines ---'
+          jq -r '.[]?.message // empty' diagnostics/lambda-logs-live-session-auth-errors.json || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
