@@ -12,6 +12,7 @@ on:
         description: 'Custom chat probe message'
         required: false
         default: 'How do I apply for farm loans?'
+        type: string
 
 permissions:
   id-token: write
@@ -22,19 +23,29 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}
       STACK_NAME: ${{ vars.STACK_NAME }}
       AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
       AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
       DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
       WEBSOCKET_LAMBDA_NAME: ${{ vars.WEBSOCKET_LAMBDA_NAME }}
-      PROBE_MESSAGE: ${{ github.event.inputs.PROBE_MESSAGE }}
+      PROBE_MESSAGE: ${{ github.event.inputs.PROBE_MESSAGE || 'How do I apply for farm loans?' }}
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Resolve Amplify app id
         run: |
