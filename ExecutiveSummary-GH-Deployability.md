@@ -72,3 +72,26 @@ The repository is now deployable through GitHub Actions with significantly impro
 1. If desired, smoke tests can be further split into separate frontend-only and backend-public endpoint jobs for even clearer diagnostics.
 2. Protected endpoint checks can optionally validate expected 401/403 behavior to continuously assert Cognito enforcement.
 3. A small set of integration fixtures could be added later to test feedback updates against known seeded conversations when deeper functional verification is needed.
+
+## Recent Stabilization Changes (May 2026)
+These items document deviations from the original code in the most recent commits and why each was necessary.
+
+1. Broadened Knowledge Base role Bedrock rerank permissions in backend stack (`ccc5f10`).
+   - What changed: `KnowledgeBaseRole` permission for Bedrock reranking was broadened to allow `bedrock:Rerank`/`bedrock:InvokeModel` with `resources: ['*']`.
+   - Why necessary: BedrockAgentRuntime rerank calls produced runtime `AccessDeniedException` with model identifier/resource resolution behavior that did not consistently match a narrow ARN policy.
+
+2. Removed temporary diagnostic workflows and scripts (`13d0e86`).
+   - What changed: Deleted temporary `tmp-*` GitHub workflows and helper scripts used during incident diagnostics.
+   - Why necessary: Temporary assets were intentionally short-lived and created operational noise after root-cause isolation; cleanup reduced maintenance risk and confusion in Actions.
+
+3. Reworked smoke workflow identity and trigger behavior (`f9666d0`, `bff9c15`, `c5776c0`, `eebf029`).
+   - What changed: Smoke workflow was renamed/recreated as `.github/workflows/askusda-smoke.yml`, simplified to dispatch/push behavior, and aligned to the known-good `initial-crawl` template baseline (`checkout`, `setup-python`, explicit AWS env wiring, typed input).
+   - Why necessary: GitHub Actions was registering smoke by path-like metadata and showing unreliable dispatch behavior; recreating and simplifying the workflow improved registration consistency and repeatability.
+
+4. Added Bedrock generation model identifier fallback logic in websocket chat handler (`f2af8b2`).
+   - What changed: The websocket handler now tries an ordered set of model identifiers (env-configured first, then known profile/id variants) and falls back only on invalid-model validation errors.
+   - Why necessary: Chat requests were failing with BedrockRuntime 400 `Invalid request. The provided model identifier is invalid.` in environments where a single hardcoded identifier form was not accepted.
+
+5. Added Knowledge Base retrieval fallback when rerank model identifier is invalid (`284ab44`).
+   - What changed: KB retrieval now retries without reranking when BedrockAgentRuntime returns model-identifier validation errors for rerank configuration.
+   - Why necessary: BedrockAgentRuntime rerank identifier validation failures were causing full chat request failure; this fallback preserves response availability while still using KB retrieval.

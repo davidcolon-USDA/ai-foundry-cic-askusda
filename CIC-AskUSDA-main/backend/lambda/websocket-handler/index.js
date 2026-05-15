@@ -190,6 +190,9 @@ async function retrieveFromKB(query) {
     retrievalQuery: { text: query },
   };
 
+  // May 2026 hotfix: some environments reject the rerank model identifier at runtime.
+  // We prefer reranking when available, but automatically fall back to plain retrieval
+  // so chat remains available instead of failing with a 400 ValidationException.
   const rerankParams = {
     ...baseParams,
     retrievalConfiguration: {
@@ -274,6 +277,8 @@ async function buildCitations(results) {
 
 function getModelIdCandidates() {
   const profileId = 'us.amazon.nova-pro-v1:0';
+  // May 2026 hotfix: model identifier support differs by region/account and Bedrock API path.
+  // Try env-configured model first, then known profile/id variants to avoid hard-fail chat errors.
   const candidates = [
     BEDROCK_MODEL_ID,
     profileId,
@@ -360,6 +365,7 @@ async function streamResponse(connectionId, userMessage, context) {
       return await streamFromModel(connectionId, commandParams);
     } catch (error) {
       lastError = error;
+      // Only fall through to another model identifier for the known validation class.
       if (isInvalidModelIdentifierError(error) && i < modelCandidates.length - 1) {
         console.warn(`[PIPELINE] Invalid model identifier rejected by Bedrock, falling back from ${modelId}`);
         continue;
