@@ -1,0 +1,234 @@
+name: Temp Admin Dashboard Diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_name:
+        description: CloudFormation stack name for backend outputs
+        required: false
+        default: AskUSDA-Backend
+      aws_region:
+        description: AWS region
+        required: false
+        default: us-east-1
+      amplify_app_id:
+        description: Optional override for Amplify app id
+        required: false
+        default: ""
+      deploy_branch:
+        description: Amplify branch to inspect
+        required: false
+        default: main
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  diagnose-admin-dashboard:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION_VAR: ${{ vars.AWS_REGION }}
+      STACK_NAME_VAR: ${{ vars.STACK_NAME }}
+      AMPLIFY_APP_ID_VAR: ${{ vars.AMPLIFY_APP_ID }}
+      DEPLOY_BRANCH_VAR: ${{ vars.DEPLOY_BRANCH }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Resolve runtime parameters
+        id: params
+        run: |
+          REGION="${{ github.event.inputs.aws_region }}"
+          if [ -z "${REGION}" ]; then
+            REGION="${AWS_REGION_VAR:-us-east-1}"
+          fi
+
+          STACK_NAME="${{ github.event.inputs.stack_name }}"
+          if [ -z "${STACK_NAME}" ]; then
+            STACK_NAME="${STACK_NAME_VAR:-AskUSDA-Backend}"
+          fi
+
+          APP_ID="${{ github.event.inputs.amplify_app_id }}"
+          if [ -z "${APP_ID}" ]; then
+            APP_ID="${AMPLIFY_APP_ID_VAR:-}"
+          fi
+
+          BRANCH="${{ github.event.inputs.deploy_branch }}"
+          if [ -z "${BRANCH}" ]; then
+            BRANCH="${DEPLOY_BRANCH_VAR:-main}"
+          fi
+
+          mkdir -p diag
+          echo "region=${REGION}" >> "$GITHUB_OUTPUT"
+          echo "stack_name=${STACK_NAME}" >> "$GITHUB_OUTPUT"
+          echo "app_id=${APP_ID}" >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Pull stack outputs and identifiers
+        id: stack
+        run: |
+          set -euo pipefail
+          REGION="${{ steps.params.outputs.region }}"
+          STACK_NAME="${{ steps.params.outputs.stack_name }}"
+
+          aws cloudformation describe-stacks \
+            --stack-name "${STACK_NAME}" \
+            --region "${REGION}" \
+            > diag/stack-describe.json
+
+          jq '.Stacks[0].Outputs' diag/stack-describe.json > diag/stack-outputs.json
+
+          stack_arn=$(jq -r '.Stacks[0].StackId // ""' diag/stack-describe.json)
+          admin_api_url=$(jq -r '.Stacks[0].Outputs[] | select(.OutputKey=="AdminApiUrl") | .OutputValue' diag/stack-describe.json)
+          websocket_url=$(jq -r '.Stacks[0].Outputs[] | select(.OutputKey=="WebSocketUrl") | .OutputValue' diag/stack-describe.json)
+          user_pool_id=$(jq -r '.Stacks[0].Outputs[] | select(.OutputKey=="AdminUserPoolId") | .OutputValue' diag/stack-describe.json)
+          client_id=$(jq -r '.Stacks[0].Outputs[] | select(.OutputKey=="AdminUserPoolClientId") | .OutputValue' diag/stack-describe.json)
+
+          echo "stack_arn=${stack_arn}" >> "$GITHUB_OUTPUT"
+          echo "admin_api_url=${admin_api_url}" >> "$GITHUB_OUTPUT"
+          echo "websocket_url=${websocket_url}" >> "$GITHUB_OUTPUT"
+          echo "user_pool_id=${user_pool_id}" >> "$GITHUB_OUTPUT"
+          echo "client_id=${client_id}" >> "$GITHUB_OUTPUT"
+
+      - name: Pull Amplify app and branch context
+        id: amplify
+        run: |
+          set -euo pipefail
+          REGION="${{ steps.params.outputs.region }}"
+          APP_ID="${{ steps.params.outputs.app_id }}"
+          BRANCH="${{ steps.params.outputs.branch }}"
+
+          if [ -z "${APP_ID}" ]; then
+            echo "No Amplify app id provided/found; skipping Amplify diagnostics." | tee diag/amplify-info.txt
+            echo "app_url=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          aws amplify get-app --app-id "${APP_ID}" --region "${REGION}" > diag/amplify-app.json
+          aws amplify get-branch --app-id "${APP_ID}" --branch-name "${BRANCH}" --region "${REGION}" > diag/amplify-branch.json
+
+          default_domain=$(jq -r '.app.defaultDomain // ""' diag/amplify-app.json)
+          app_url="https://${BRANCH}.${default_domain}"
+
+          echo "app_url=${app_url}" >> "$GITHUB_OUTPUT"
+
+      - name: Probe Admin API and CORS behavior
+        run: |
+          set -euo pipefail
+          ADMIN_API_URL="${{ steps.stack.outputs.admin_api_url }}"
+          APP_URL="${{ steps.amplify.outputs.app_url }}"
+
+          if [ -z "${ADMIN_API_URL}" ] || [ "${ADMIN_API_URL}" = "null" ]; then
+            echo "AdminApiUrl output is empty; cannot probe API." | tee diag/admin-api-probe.txt
+            exit 1
+          fi
+
+          BASE="${ADMIN_API_URL%/}"
+          ORIGIN_HEADER=()
+          if [ -n "${APP_URL}" ]; then
+            ORIGIN_HEADER=(-H "Origin: ${APP_URL}")
+          fi
+
+          {
+            echo "Admin API: ${BASE}"
+            echo "App origin: ${APP_URL:-not resolved}"
+          } | tee diag/admin-api-probe.txt
+
+          set +e
+          curl -sS -D diag/options-metrics.headers -o diag/options-metrics.body \
+            -X OPTIONS "${BASE}/metrics" \
+            "${ORIGIN_HEADER[@]}" \
+            -H "Access-Control-Request-Method: GET" \
+            -H "Access-Control-Request-Headers: authorization,content-type"
+          options_exit=$?
+
+          curl -sS -D diag/get-metrics-unauth.headers -o diag/get-metrics-unauth.body \
+            -X GET "${BASE}/metrics?days=7" \
+            "${ORIGIN_HEADER[@]}"
+          metrics_exit=$?
+
+          curl -sS -D diag/get-feedback-unauth.headers -o diag/get-feedback-unauth.body \
+            -X GET "${BASE}/feedback?limit=1" \
+            "${ORIGIN_HEADER[@]}"
+          feedback_exit=$?
+
+          curl -sS -D diag/get-escalations-unauth.headers -o diag/get-escalations-unauth.body \
+            -X GET "${BASE}/escalations?limit=1" \
+            "${ORIGIN_HEADER[@]}"
+          escalations_exit=$?
+          set -e
+
+          {
+            echo "OPTIONS /metrics exit code: ${options_exit}"
+            echo "GET /metrics unauth exit code: ${metrics_exit}"
+            echo "GET /feedback unauth exit code: ${feedback_exit}"
+            echo "GET /escalations unauth exit code: ${escalations_exit}"
+          } | tee -a diag/admin-api-probe.txt
+
+      - name: Optional authenticated probe (if secret provided)
+        if: ${{ secrets.ADMIN_DEBUG_ID_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          ADMIN_API_URL="${{ steps.stack.outputs.admin_api_url }}"
+          APP_URL="${{ steps.amplify.outputs.app_url }}"
+          BASE="${ADMIN_API_URL%/}"
+
+          ORIGIN_HEADER=()
+          if [ -n "${APP_URL}" ]; then
+            ORIGIN_HEADER=(-H "Origin: ${APP_URL}")
+          fi
+
+          curl -sS -D diag/get-metrics-auth.headers -o diag/get-metrics-auth.body \
+            -X GET "${BASE}/metrics?days=7" \
+            "${ORIGIN_HEADER[@]}" \
+            -H "Authorization: ${{ secrets.ADMIN_DEBUG_ID_TOKEN }}"
+
+      - name: Write troubleshooting summary
+        run: |
+          {
+            echo "## Temp Admin Dashboard Diagnostics"
+            echo ""
+            echo "### Context"
+            echo "- Stack: ${{ steps.params.outputs.stack_name }}"
+            echo "- Region: ${{ steps.params.outputs.region }}"
+            echo "- Amplify app id: ${{ steps.params.outputs.app_id || 'not resolved' }}"
+            echo "- Amplify branch: ${{ steps.params.outputs.branch }}"
+            echo ""
+            echo "### Key values"
+            echo "- AdminApiUrl: ${{ steps.stack.outputs.admin_api_url }}"
+            echo "- WebSocketUrl: ${{ steps.stack.outputs.websocket_url }}"
+            echo "- AdminUserPoolId: ${{ steps.stack.outputs.user_pool_id }}"
+            echo "- AdminUserPoolClientId: ${{ steps.stack.outputs.client_id }}"
+            echo "- Stack ARN: ${{ steps.stack.outputs.stack_arn }}"
+            echo "- App URL: ${{ steps.amplify.outputs.app_url || 'not resolved' }}"
+            echo ""
+            echo "### CORS/HTTP checks"
+            echo "- See artifact files in diag/ for response headers and bodies:"
+            echo "  - options-metrics.headers"
+            echo "  - get-metrics-unauth.headers"
+            echo "  - get-feedback-unauth.headers"
+            echo "  - get-escalations-unauth.headers"
+            echo ""
+            echo "### Notes"
+            echo "- Browser 'Failed to fetch' commonly indicates CORS rejection, DNS/URL issues, or blocked network requests."
+            echo "- 401 without CORS headers can still appear as 'Failed to fetch' in browser JS."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload diagnostics artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-dashboard-diagnostics
+          path: diag/
+          if-no-files-found: error
+
+      - name: Temporary workflow reminder
+        run: |
+          echo "This is a temporary diagnostics workflow. Remove .github/workflows/temp-admin-diagnostics.yml after troubleshooting." >> "$GITHUB_STEP_SUMMARY"
