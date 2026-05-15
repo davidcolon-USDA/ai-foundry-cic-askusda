@@ -39,6 +39,7 @@ This table summarizes the main tunable parameters for the AskUSDA system, where 
 - **Prompt behavior**: The system prompt in `backend/lambda/websocket-handler/index.js` controls answer style, citation expectations, scope boundaries, and fallback messaging.
 - **Crawler refresh**: First-time crawls use `.github/workflows/initial-crawl.yml`; nightly delta crawls are controlled by repo variables and the scheduler configuration in `backend/lib/backend-stack.ts`.
 - **Nightly crawl gate**: The nightly trigger only forwards the crawl when prior crawl artifacts already exist under the crawler output prefix.
+- **Change propagation path**: Tuning and configuration updates are source-controlled and applied by committing changes to this GitHub repository, then running/passing the deployment workflows.
 
 ## Detailed Parameter Descriptions
 
@@ -75,22 +76,20 @@ This table summarizes the main tunable parameters for the AskUSDA system, where 
 
 Refer to the respective files for additional inline comments and examples.
 
-**How to Tune (Revised for EC2 with AWS CLI):**
-- For infrastructure (memory, CPU, timeouts):
-  1. SSH into the EC2 instance.
-  2. Navigate to the project directory.
-  3. Edit the CDK stack files (e.g., `backend-stack.ts`, `crawler-stack.ts`).
-  4. Deploy changes using the AWS CLI:
-     ```bash
-     cdk deploy --all
-     ```
+**How to Apply Tuning Changes (GitHub Workflow):**
+- For infrastructure (memory, CPU, timeouts, scheduler settings):
+  1. Edit the relevant CDK files (for example `backend/lib/backend-stack.ts`, `backend/lib/crawler-stack.ts`, or workflow variables/contexts).
+  2. Commit and push the changes to the GitHub repository.
+  3. Run the infrastructure deployment workflow (`infra-deploy.yml`) and then application deployment workflow (`app-deploy.yml`) when needed.
 
 - For crawler jobs:
-  1. Edit `urls.yaml` to define new crawl jobs.
-  2. Run the crawler locally or trigger it via ECS.
+  1. Edit crawl definitions (for example `backend/crawler/urls.yaml`).
+  2. Commit and push the update.
+  3. Trigger the appropriate workflow (for example `initial-crawl.yml`) or allow scheduled automation to pick up changes.
 
 - For Lambda/backend configuration:
-  1. Update environment variables in the CDK stack files.
-  2. Redeploy the stack using the AWS CLI.
+  1. Update configuration in source-controlled files (CDK context values, stack env vars, workflow inputs/variables).
+  2. Commit and push.
+  3. Redeploy through GitHub Actions so the running environment matches the repo state.
 
-The EC2 instance with the proper IAM role and AWS CLI pre-configured simplifies deployment and tuning by eliminating the need for manual credential setup.
+This repository is operated with GitHub Actions as the deployment control plane, so pushing reviewed changes through the repo is the expected way to propagate tuning updates.
