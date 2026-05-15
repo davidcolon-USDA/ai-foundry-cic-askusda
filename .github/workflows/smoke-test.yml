@@ -1,21 +1,26 @@
+jobs:
 name: Smoke Test
 
-
-
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/smoke-test.yml"
   workflow_run:
     workflows:
-      - "Deploy Infrastructure"
       - "Deploy Application"
     types:
       - completed
   workflow_dispatch:
+
 permissions:
   id-token: write
   contents: read
 
 jobs:
   smoke-test:
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -23,8 +28,6 @@ jobs:
       AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
       AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
       DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
-      PROBE_MESSAGE: "How do I apply for farm loans?"
-      EXTRA_PROBE_MESSAGE: "What USDA programs support beginning farmers?"
 
     steps:
       - name: Configure AWS credentials (OIDC)
@@ -51,7 +54,118 @@ jobs:
           TARGET_STACK="${STACK_NAME:-AskUSDA-Backend}"
           echo "admin_api_url=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`AdminApiUrl`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
 
-      # ...rest of the smoke test steps (frontend, websocket, etc.)...
+      - name: Smoke test deployed frontend and public API
+        run: |
+          ADMIN_API_URL="${{ steps.stack.outputs.admin_api_url }}"
+          APP_ID="${AMPLIFY_APP_ID}"
+          BRANCH="${DEPLOY_BRANCH:-main}"
+          ADMIN_API_BASE="${ADMIN_API_URL%/}"
+
+          curl_http_code() {
+            local url="$1"
+            shift
+            local output
+            local curl_exit
+
+            set +e
+            output=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$@" "${url}" 2>&1)
+            curl_exit=$?
+            set -e
+
+            if [ ${curl_exit} -ne 0 ]; then
+              if [ ${curl_exit} -eq 28 ]; then
+                echo "TIMEOUT"
+              else
+                echo "CURL_ERROR:${curl_exit}:${output}"
+              fi
+              return 1
+            fi
+
+            echo "${output}"
+          }
+
+          FRONTEND_URL=$(aws amplify get-branch \
+            --app-id "${APP_ID}" \
+            --branch-name "${BRANCH}" \
+            --region "${AWS_REGION}" \
+            --query 'branch.webUrl' \
+            --output text)
+
+          if [ -z "${FRONTEND_URL}" ] || [ "${FRONTEND_URL}" = "None" ]; then
+            FRONTEND_URL="https://${BRANCH}.${APP_ID}.amplifyapp.com"
+            echo "Using fallback Amplify URL: ${FRONTEND_URL}"
+          fi
+
+          if ! FRONTEND_CODE=$(curl_http_code "${FRONTEND_URL}"); then
+            if [ "${FRONTEND_CODE}" = "TIMEOUT" ]; then
+              echo "Frontend smoke test failed: network timeout while requesting ${FRONTEND_URL}"
+            else
+              echo "Frontend smoke test failed: ${FRONTEND_CODE}"
+            fi
+            exit 1
+          fi
+          echo "Frontend status code: ${FRONTEND_CODE}"
+          if [ "${FRONTEND_CODE}" -lt 200 ] || [ "${FRONTEND_CODE}" -ge 400 ]; then
+            echo "Frontend smoke test failed"
+            exit 1
+          fi
+
+          if ! FEEDBACK_CODE=$(curl_http_code "${ADMIN_API_BASE}/feedback" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --data '{"conversationId":"smoke-feedback","feedback":"pos"}'); then
+            if [ "${FEEDBACK_CODE}" = "TIMEOUT" ]; then
+              echo "Primary feedback endpoint test failed: network timeout on ${ADMIN_API_BASE}/feedback"
+            else
+              echo "Primary feedback endpoint test failed: ${FEEDBACK_CODE}"
+            fi
+            exit 1
+          fi
+
+          if [ "${FEEDBACK_CODE}" -lt 200 ] || [ "${FEEDBACK_CODE}" -ge 400 ]; then
+            if ! FEEDBACK_CODE=$(curl_http_code "${ADMIN_API_BASE}/prod/feedback" \
+              -X POST \
+              -H "Content-Type: application/json" \
+              --data '{"conversationId":"smoke-feedback","feedback":"pos"}'); then
+              if [ "${FEEDBACK_CODE}" = "TIMEOUT" ]; then
+                echo "POST /prod/feedback fallback status code: TIMEOUT | test: stage-prefixed fallback endpoint connectivity"
+              else
+                echo "POST /prod/feedback fallback status code: ${FEEDBACK_CODE} | test: stage-prefixed fallback endpoint connectivity"
+              fi
+              exit 1
+            fi
+            echo "POST /prod/feedback fallback status code: ${FEEDBACK_CODE} | test: stage-prefixed fallback endpoint returned application response"
+          fi
+
+          echo "Feedback smoke status code: ${FEEDBACK_CODE} | test: feedback API reached and returned an HTTP result"
+          # Synthetic conversation IDs are expected to return 404 from feedback update.
+          if [ "${FEEDBACK_CODE}" = "404" ]; then
+            echo "Feedback smoke returned expected 404 for synthetic conversation id | test: backend validation rejects non-existent conversation id"
+          elif [ "${FEEDBACK_CODE}" -lt 200 ] || [ "${FEEDBACK_CODE}" -ge 400 ]; then
+            echo "Admin API smoke test failed on /feedback"
+            exit 1
+          fi
+
+          ESCALATION_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --data '{"name":"Smoke Test","email":"smoke@example.com","question":"smoke test"}' \
+            "${ADMIN_API_BASE}/escalations")
+
+          if [ "${ESCALATION_CODE}" -lt 200 ] || [ "${ESCALATION_CODE}" -ge 400 ]; then
+            ESCALATION_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X POST \
+              -H "Content-Type: application/json" \
+              --data '{"name":"Smoke Test","email":"smoke@example.com","question":"smoke test"}' \
+              "${ADMIN_API_BASE}/prod/escalations")
+            echo "POST /prod/escalations fallback status code: ${ESCALATION_CODE}"
+          fi
+
+          echo "Escalation smoke status code: ${ESCALATION_CODE}"
+          if [ "${ESCALATION_CODE}" -lt 200 ] || [ "${ESCALATION_CODE}" -ge 400 ]; then
+            echo "Admin API smoke test failed on /escalations"
+            exit 1
+          fi
               fi
               return 1
             fi

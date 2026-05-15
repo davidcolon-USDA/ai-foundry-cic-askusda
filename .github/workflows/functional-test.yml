@@ -1,0 +1,82 @@
+name: Functional Test
+
+on:
+  workflow_run:
+    workflows:
+      - "Deploy Infrastructure"
+      - "Deploy Application"
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  functional-test:
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      STACK_NAME: ${{ vars.STACK_NAME }}
+      AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
+      AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
+      DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
+      PROBE_MESSAGE: "How do I apply for farm loans?"
+      EXTRA_PROBE_MESSAGE: "What USDA programs support beginning farmers?"
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Resolve Amplify app id
+        run: |
+          if [ -z "${AMPLIFY_APP_ID}" ]; then
+            APP_NAME="${AMPLIFY_APP_NAME:-AskUSDA-Frontend}"
+            LOOKUP_APP_ID=$(aws amplify list-apps --region "${AWS_REGION}" --query "apps[?name=='${APP_NAME}'].appId | [0]" --output text)
+            if [ -z "${LOOKUP_APP_ID}" ] || [ "${LOOKUP_APP_ID}" = "None" ]; then
+              echo "Unable to resolve AMPLIFY_APP_ID for functional test"
+              exit 1
+            fi
+            echo "AMPLIFY_APP_ID=${LOOKUP_APP_ID}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Resolve backend outputs
+        id: stack
+        run: |
+          TARGET_STACK="${STACK_NAME:-AskUSDA-Backend}"
+          echo "admin_api_url=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`AdminApiUrl`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+
+      - name: Functional test deployed frontend with chat probes
+        run: |
+          APP_ID="${AMPLIFY_APP_ID}"
+          BRANCH="${DEPLOY_BRANCH:-main}"
+          FRONTEND_URL=$(aws amplify get-branch \
+            --app-id "${APP_ID}" \
+            --branch-name "${BRANCH}" \
+            --region "${AWS_REGION}" \
+            --query 'branch.webUrl' \
+            --output text)
+
+          if [ -z "${FRONTEND_URL}" ] || [ "${FRONTEND_URL}" = "None" ]; then
+            FRONTEND_URL="https://${BRANCH}.${APP_ID}.amplifyapp.com"
+            echo "Using fallback Amplify URL: ${FRONTEND_URL}"
+          fi
+
+          check_probe() {
+            local probe_message="$1"
+            local label="$2"
+            RESPONSE=$(curl -s -X POST "${FRONTEND_URL}/api/chat" -H "Content-Type: application/json" --data "{\"message\":\"${probe_message}\"}")
+            echo "Probe (${label}) response: $RESPONSE"
+            if [[ "$RESPONSE" == *"error"* ]]; then
+              echo "Functional test failed for probe: $label"
+              exit 1
+            fi
+          }
+
+          check_probe "${PROBE_MESSAGE}" "primary"
+          check_probe "${EXTRA_PROBE_MESSAGE}" "secondary"
