@@ -49,7 +49,7 @@ jobs:
         id: stack
         run: |
           TARGET_STACK="${STACK_NAME:-AskUSDA-Backend}"
-          echo "admin_api_url=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`AdminApiUrl`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+          echo "websocket_url=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`WebSocketUrl`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
 
       - name: Functional test deployed frontend with chat probes
         run: |
@@ -67,16 +67,92 @@ jobs:
             echo "Using fallback Amplify URL: ${FRONTEND_URL}"
           fi
 
-          check_probe() {
-            local probe_message="$1"
-            local label="$2"
-            RESPONSE=$(curl -s -X POST "${FRONTEND_URL}/api/chat" -H "Content-Type: application/json" --data "{\"message\":\"${probe_message}\"}")
-            echo "Probe (${label}) response: $RESPONSE"
-            if [[ "$RESPONSE" == *"error"* ]]; then
-              echo "Functional test failed for probe: $label"
-              exit 1
-            fi
+          echo "Frontend URL: ${FRONTEND_URL}"
+          curl -fsS --connect-timeout 10 --max-time 20 "${FRONTEND_URL}" >/dev/null
+
+          python -m pip install --quiet websocket-client
+
+          export WS_URL="${{ steps.stack.outputs.websocket_url }}"
+          if [ -z "${WS_URL}" ] || [ "${WS_URL}" = "None" ]; then
+            echo "Unable to resolve WebSocketUrl for functional test"
+            exit 1
+          fi
+
+          probe_chat() {
+            local probe_label="$1"
+            local probe_message="$2"
+
+            export CHAT_SESSION_ID="functional-${probe_label}-$(date +%s)"
+            export CHAT_MESSAGE="${probe_message}"
+
+            echo "Probe (${probe_label}) question: ${probe_message}"
+            python - <<'PY'
+          import json
+          import os
+          import ssl
+          import time
+
+          import websocket
+
+          url = os.environ["WS_URL"]
+          session_id = os.environ["CHAT_SESSION_ID"]
+          message = os.environ["CHAT_MESSAGE"]
+
+          frames = []
+          result = {
+            "sessionId": session_id,
+            "websocketUrl": url,
+            "message": message,
+            "finalText": None,
+            "error": None,
+            "frames": frames,
           }
 
-          check_probe "${PROBE_MESSAGE}" "primary"
-          check_probe "${EXTRA_PROBE_MESSAGE}" "secondary"
+          try:
+            ws = websocket.create_connection(url, timeout=60, sslopt={"cert_reqs": ssl.CERT_REQUIRED})
+            ws.settimeout(60)
+            ws.send(json.dumps({"action": "sendMessage", "message": message, "sessionId": session_id}))
+
+            stream_text = ""
+            started = time.time()
+            while time.time() - started < 90:
+              raw = ws.recv()
+              frames.append(raw)
+              try:
+                data = json.loads(raw)
+              except Exception:
+                continue
+
+              msg_type = data.get("type")
+              if msg_type == "stream":
+                chunk = data.get("chunk") or ""
+                stream_text += chunk
+                if data.get("isComplete") and stream_text:
+                  result["finalText"] = stream_text
+                  break
+              elif msg_type == "message":
+                result["finalText"] = data.get("message")
+                break
+              elif msg_type == "error":
+                result["error"] = data.get("message") or raw
+                break
+
+            ws.close()
+          except Exception as exc:
+            result["error"] = str(exc)
+
+          print(json.dumps(result, indent=2))
+
+          if result["error"]:
+            raise SystemExit(result["error"])
+
+          if not result["finalText"]:
+            raise SystemExit("No final model response was returned")
+
+          print("FINAL_LLM_RESPONSE:")
+          print(result["finalText"])
+          PY
+          }
+
+          probe_chat "primary" "${PROBE_MESSAGE}"
+          probe_chat "secondary" "${EXTRA_PROBE_MESSAGE}"
