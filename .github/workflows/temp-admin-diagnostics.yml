@@ -174,9 +174,15 @@ jobs:
           } | tee -a diag/admin-api-probe.txt
 
       - name: Optional authenticated probe (if secret provided)
-        if: ${{ secrets.ADMIN_DEBUG_ID_TOKEN != '' }}
+        env:
+          ADMIN_DEBUG_ID_TOKEN: ${{ secrets.ADMIN_DEBUG_ID_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${ADMIN_DEBUG_ID_TOKEN}" ]; then
+            echo "ADMIN_DEBUG_ID_TOKEN is not set; skipping authenticated metrics probe." | tee diag/get-metrics-auth.skip
+            exit 0
+          fi
+
           ADMIN_API_URL="${{ steps.stack.outputs.admin_api_url }}"
           APP_URL="${{ steps.amplify.outputs.app_url }}"
           BASE="${ADMIN_API_URL%/}"
@@ -189,7 +195,7 @@ jobs:
           curl -sS -D diag/get-metrics-auth.headers -o diag/get-metrics-auth.body \
             -X GET "${BASE}/metrics?days=7" \
             "${ORIGIN_HEADER[@]}" \
-            -H "Authorization: ${{ secrets.ADMIN_DEBUG_ID_TOKEN }}"
+            -H "Authorization: ${ADMIN_DEBUG_ID_TOKEN}"
 
       - name: Write troubleshooting summary
         run: |
