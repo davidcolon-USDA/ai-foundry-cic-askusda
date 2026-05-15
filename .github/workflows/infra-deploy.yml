@@ -158,9 +158,13 @@ jobs:
         working-directory: CIC-AskUSDA-main/backend
         run: |
           RESOLVED_AMPLIFY_APP_ID="${{ steps.amplify.outputs.app_id }}"
+          RESOLVED_DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
           CONTEXT_ARGS=""
           if [ -n "${RESOLVED_AMPLIFY_APP_ID}" ]; then
             CONTEXT_ARGS="${CONTEXT_ARGS} --context amplifyAppId=${RESOLVED_AMPLIFY_APP_ID}"
+          fi
+          if [ -n "${RESOLVED_DEPLOY_BRANCH}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context deployBranch=${RESOLVED_DEPLOY_BRANCH}"
           fi
           if [ -n "${CRAWLER_BUCKET_NAME}" ]; then
             CONTEXT_ARGS="${CONTEXT_ARGS} --context crawlerBucketName=${CRAWLER_BUCKET_NAME}"
@@ -184,9 +188,13 @@ jobs:
           done
 
           RESOLVED_AMPLIFY_APP_ID="${{ steps.amplify.outputs.app_id }}"
+          RESOLVED_DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
           CONTEXT_ARGS=""
           if [ -n "${RESOLVED_AMPLIFY_APP_ID}" ]; then
             CONTEXT_ARGS="${CONTEXT_ARGS} --context amplifyAppId=${RESOLVED_AMPLIFY_APP_ID}"
+          fi
+          if [ -n "${RESOLVED_DEPLOY_BRANCH}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context deployBranch=${RESOLVED_DEPLOY_BRANCH}"
           fi
           if [ -n "${CRAWLER_BUCKET_NAME}" ]; then
             CONTEXT_ARGS="${CONTEXT_ARGS} --context crawlerBucketName=${CRAWLER_BUCKET_NAME}"

@@ -45,8 +45,11 @@ export class USDAChatbotStack extends cdk.Stack {
 
     // ==================== Amplify App ID (from CDK context) ====================
     const amplifyAppId = this.node.tryGetContext('amplifyAppId') || '';
+    // Addition from original code: derive the allowed frontend origin from the configured Amplify deploy branch
+    // instead of hardcoding `master`, so Admin API CORS matches the live branch URL.
+    const deployBranch = this.node.tryGetContext('deployBranch') || 'main';
     const frontendOrigin = amplifyAppId
-      ? `https://master.${amplifyAppId}.amplifyapp.com`
+      ? `https://${deployBranch}.${amplifyAppId}.amplifyapp.com`
       : '*';
 
     // ==================== DynamoDB - Conversation History ====================

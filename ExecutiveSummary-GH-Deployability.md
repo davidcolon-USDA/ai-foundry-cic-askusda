@@ -99,3 +99,7 @@ These items document deviations from the original code in the most recent commit
 6. Added admin login forgot-password/reset-password flow in frontend auth (`May 2026`).
    - What changed: Added Cognito `ForgotPassword` and `ConfirmForgotPassword` support in admin auth context and corresponding `/admin` UI states for requesting verification codes and completing resets.
    - Why necessary: Original admin login UX did not provide a self-service password recovery path, causing operational friction and support overhead for locked-out users.
+
+7. Removed hardcoded Amplify branch assumption from Admin API CORS origin (`May 2026`).
+   - What changed: Backend stack frontend origin logic now derives the Amplify URL from the configured deploy branch context instead of hardcoding `master`, and deploy workflows pass that branch into CDK.
+   - Why necessary: The live frontend was deployed on `main`, while the Admin API allowed only the `master` origin, causing browser-side `Failed to fetch` behavior despite successful authenticated API responses.

@@ -89,6 +89,9 @@ jobs:
           if [ -n "${AMPLIFY_APP_ID}" ]; then
             CONTEXT_ARGS="${CONTEXT_ARGS} --context amplifyAppId=${AMPLIFY_APP_ID}"
           fi
+          if [ -n "${DEPLOY_BRANCH}" ]; then
+            CONTEXT_ARGS="${CONTEXT_ARGS} --context deployBranch=${DEPLOY_BRANCH}"
+          fi
           if [ -n "${NIGHTLY_DELTA_CRAWL_ENABLED}" ]; then
             CONTEXT_ARGS="${CONTEXT_ARGS} --context nightlyDeltaCrawlEnabled=${NIGHTLY_DELTA_CRAWL_ENABLED}"
           fi
