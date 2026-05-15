@@ -226,26 +226,26 @@ jobs:
               <div class="card">
                 <h2>Cognito CLI Commands (Add Admin Users)</h2>
                 <pre>aws cognito-idp admin-create-user \
-  --user-pool-id ${{ steps.stack.outputs.cognito_user_pool_id }} \
-  --username admin@example.com \
-  --user-attributes Name=email,Value=admin@example.com Name=email_verified,Value=true \
-  --temporary-password 'TempPass123!' \
-  --message-action SUPPRESS \
-  --region ${AWS_REGION}
+                  --user-pool-id ${{ steps.stack.outputs.cognito_user_pool_id }} \
+                  --username admin@example.com \
+                  --user-attributes Name=email,Value=admin@example.com Name=email_verified,Value=true \
+                  --temporary-password 'TempPass123!' \
+                  --message-action SUPPRESS \
+                  --region ${AWS_REGION}
 
-aws cognito-idp admin-set-user-password \
-  --user-pool-id ${{ steps.stack.outputs.cognito_user_pool_id }} \
-  --username admin@example.com \
-  --password 'ChangeMe123!' \
-  --permanent \
-  --region ${AWS_REGION}
+                aws cognito-idp admin-set-user-password \
+                  --user-pool-id ${{ steps.stack.outputs.cognito_user_pool_id }} \
+                  --username admin@example.com \
+                  --password 'ChangeMe123!' \
+                  --permanent \
+                  --region ${AWS_REGION}
 
-# Optional: only if your Cognito pool uses this group
-aws cognito-idp admin-add-user-to-group \
-  --user-pool-id ${{ steps.stack.outputs.cognito_user_pool_id }} \
-  --username admin@example.com \
-  --group-name admins \
-  --region ${AWS_REGION}</pre>
+                # Optional: only if your Cognito pool uses this group
+                aws cognito-idp admin-add-user-to-group \
+                  --user-pool-id ${{ steps.stack.outputs.cognito_user_pool_id }} \
+                  --username admin@example.com \
+                  --group-name admins \
+                  --region ${AWS_REGION}</pre>
                 <p><strong>App client ID:</strong> ${{ steps.stack.outputs.cognito_client_id }}</p>
               </div>
             </body>
