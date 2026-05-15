@@ -16,6 +16,9 @@ interface AdminAuthContextType {
   signIn: (username: string, password: string) => Promise<{ success: boolean; error?: string; newPasswordRequired?: boolean }>;
   signOut: () => void;
   completeNewPassword: (newPassword: string) => Promise<{ success: boolean; error?: string }>;
+  // Addition from original code: explicit Cognito forgot-password API support for admin login UX.
+  startForgotPassword: (username: string) => Promise<{ success: boolean; error?: string }>;
+  confirmForgotPassword: (username: string, confirmationCode: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 const AdminAuthContext = createContext<AdminAuthContextType | undefined>(undefined);
@@ -177,6 +180,75 @@ export function AdminAuthProvider({ children }: AdminAuthProviderProps) {
     }
   };
 
+  const startForgotPassword = async (username: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const response = await fetch(COGNITO_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-amz-json-1.1',
+          'X-Amz-Target': 'AWSCognitoIdentityProviderService.ForgotPassword',
+        },
+        body: JSON.stringify({
+          ClientId: COGNITO_CLIENT_ID,
+          Username: username,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.__type) {
+        if (data.__type.includes('UserNotFoundException')) {
+          return { success: false, error: 'User not found' };
+        }
+        return { success: false, error: data.message || 'Failed to start password reset' };
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('Start forgot password error:', error);
+      return { success: false, error: 'Network error. Please try again.' };
+    }
+  };
+
+  const confirmForgotPassword = async (
+    username: string,
+    confirmationCode: string,
+    newPassword: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const response = await fetch(COGNITO_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-amz-json-1.1',
+          'X-Amz-Target': 'AWSCognitoIdentityProviderService.ConfirmForgotPassword',
+        },
+        body: JSON.stringify({
+          ClientId: COGNITO_CLIENT_ID,
+          Username: username,
+          ConfirmationCode: confirmationCode,
+          Password: newPassword,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.__type) {
+        if (data.__type.includes('CodeMismatchException')) {
+          return { success: false, error: 'Invalid verification code' };
+        }
+        if (data.__type.includes('ExpiredCodeException')) {
+          return { success: false, error: 'Verification code has expired. Request a new code.' };
+        }
+        return { success: false, error: data.message || 'Failed to reset password' };
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('Confirm forgot password error:', error);
+      return { success: false, error: 'Network error. Please try again.' };
+    }
+  };
+
   const signOut = () => {
     setUser(null);
     localStorage.removeItem('adminUser');
@@ -191,6 +263,8 @@ export function AdminAuthProvider({ children }: AdminAuthProviderProps) {
         signIn,
         signOut,
         completeNewPassword,
+        startForgotPassword,
+        confirmForgotPassword,
       }}
     >
       {children}

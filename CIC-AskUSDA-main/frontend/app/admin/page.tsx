@@ -6,16 +6,26 @@ import { useAdminAuth } from '../context/AdminAuthContext';
 
 export default function AdminLoginPage() {
   const router = useRouter();
-  const { signIn, completeNewPassword, isAuthenticated, isLoading: authLoading } = useAdminAuth();
+  const {
+    signIn,
+    completeNewPassword,
+    startForgotPassword,
+    confirmForgotPassword,
+    isAuthenticated,
+    isLoading: authLoading,
+  } = useAdminAuth();
   
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [needsNewPassword, setNeedsNewPassword] = useState(false);
+  // Addition from original code: multi-step admin auth UI now includes forgot/reset password states.
+  const [authMode, setAuthMode] = useState<'signin' | 'newPassword' | 'forgotRequest' | 'forgotConfirm'>('signin');
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -27,6 +37,7 @@ export default function AdminLoginPage() {
   const handleSignIn = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+    setInfo('');
     setIsLoading(true);
 
     const result = await signIn(username, password);
@@ -34,7 +45,7 @@ export default function AdminLoginPage() {
     if (result.success) {
       router.push('/dashboard');
     } else if (result.newPasswordRequired) {
-      setNeedsNewPassword(true);
+      setAuthMode('newPassword');
     } else {
       setError(result.error || 'Sign in failed');
     }
@@ -45,6 +56,7 @@ export default function AdminLoginPage() {
   const handleNewPassword = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+    setInfo('');
 
     if (newPassword !== confirmPassword) {
       setError('Passwords do not match');
@@ -66,6 +78,82 @@ export default function AdminLoginPage() {
     }
     
     setIsLoading(false);
+  };
+
+  const handleRequestPasswordReset = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setInfo('');
+
+    if (!username.trim()) {
+      setError('Enter your admin email to request a reset code');
+      return;
+    }
+
+    setIsLoading(true);
+    const result = await startForgotPassword(username.trim());
+
+    if (result.success) {
+      setInfo('Verification code sent. Check your email and enter it below.');
+      setAuthMode('forgotConfirm');
+    } else {
+      setError(result.error || 'Failed to request password reset');
+    }
+
+    setIsLoading(false);
+  };
+
+  const handleConfirmPasswordReset = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setInfo('');
+
+    if (!verificationCode.trim()) {
+      setError('Enter the verification code sent to your email');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+
+    setIsLoading(true);
+    const result = await confirmForgotPassword(username.trim(), verificationCode.trim(), newPassword);
+
+    if (result.success) {
+      setInfo('Password reset successful. Sign in with your new password.');
+      setAuthMode('signin');
+      setPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setVerificationCode('');
+    } else {
+      setError(result.error || 'Failed to reset password');
+    }
+
+    setIsLoading(false);
+  };
+
+  const goToForgotPassword = () => {
+    setError('');
+    setInfo('');
+    setPassword('');
+    setAuthMode('forgotRequest');
+  };
+
+  const goToSignIn = () => {
+    setError('');
+    setInfo('');
+    setVerificationCode('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setAuthMode('signin');
   };
 
   if (authLoading) {
@@ -95,7 +183,7 @@ export default function AdminLoginPage() {
 
         {/* Login Card */}
         <div className="bg-white rounded-2xl shadow-2xl p-8">
-          {!needsNewPassword ? (
+          {authMode === 'signin' ? (
             <form onSubmit={handleSignIn} className="space-y-5">
               {/* Email */}
               <div>
@@ -192,6 +280,18 @@ export default function AdminLoginPage() {
                 </div>
               )}
 
+              {/* Info Message */}
+              {info && (
+                <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-lg text-blue-700 text-sm">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="16" x2="12" y2="12" />
+                    <line x1="12" y1="8" x2="12.01" y2="8" />
+                  </svg>
+                  <span>{info}</span>
+                </div>
+              )}
+
               {/* Submit Button */}
               <button
                 type="submit"
@@ -207,8 +307,16 @@ export default function AdminLoginPage() {
                   'Sign In'
                 )}
               </button>
+
+              <button
+                type="button"
+                onClick={goToForgotPassword}
+                className="w-full text-sm text-[#002d72] hover:text-[#001f4d] font-medium"
+              >
+                Forgot password?
+              </button>
             </form>
-          ) : (
+          ) : authMode === 'newPassword' ? (
             /* New Password Form */
             <form onSubmit={handleNewPassword} className="space-y-5">
               <div className="text-center mb-4">
@@ -332,6 +440,179 @@ export default function AdminLoginPage() {
                 ) : (
                   'Set Password & Continue'
                 )}
+              </button>
+            </form>
+          ) : authMode === 'forgotRequest' ? (
+            <form onSubmit={handleRequestPasswordReset} className="space-y-5">
+              <div className="text-center mb-4">
+                <h2 className="text-lg font-semibold text-gray-800">Reset Password</h2>
+                <p className="text-sm text-gray-500 mt-1">Enter your admin email to receive a verification code</p>
+              </div>
+
+              <div>
+                <label htmlFor="username-reset" className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Email
+                </label>
+                <input
+                  id="username-reset"
+                  type="email"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#002d72] focus:border-transparent outline-none transition-all"
+                  placeholder="Enter your email"
+                  required
+                />
+              </div>
+
+              {error && (
+                <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-lg text-red-600 text-sm">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {info && (
+                <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-lg text-blue-700 text-sm">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="16" x2="12" y2="12" />
+                    <line x1="12" y1="8" x2="12.01" y2="8" />
+                  </svg>
+                  <span>{info}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full py-3 bg-[#002d72] hover:bg-[#001f4d] text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isLoading ? (
+                  <>
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    Sending code...
+                  </>
+                ) : (
+                  'Send Verification Code'
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={goToSignIn}
+                className="w-full text-sm text-[#002d72] hover:text-[#001f4d] font-medium"
+              >
+                Back to sign in
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleConfirmPasswordReset} className="space-y-5">
+              <div className="text-center mb-4">
+                <h2 className="text-lg font-semibold text-gray-800">Enter Verification Code</h2>
+                <p className="text-sm text-gray-500 mt-1">Use the code from email and choose a new password</p>
+              </div>
+
+              <div>
+                <label htmlFor="verificationCode" className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Verification Code
+                </label>
+                <input
+                  id="verificationCode"
+                  type="text"
+                  value={verificationCode}
+                  onChange={(e) => setVerificationCode(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#002d72] focus:border-transparent outline-none transition-all"
+                  placeholder="Enter code"
+                  required
+                />
+              </div>
+
+              <div>
+                <label htmlFor="forgotNewPassword" className="block text-sm font-medium text-gray-700 mb-1.5">
+                  New Password
+                </label>
+                <input
+                  id="forgotNewPassword"
+                  type={showPassword ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#002d72] focus:border-transparent outline-none transition-all"
+                  placeholder="Enter new password"
+                  required
+                  minLength={8}
+                />
+              </div>
+
+              <div>
+                <label htmlFor="forgotConfirmPassword" className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Confirm Password
+                </label>
+                <input
+                  id="forgotConfirmPassword"
+                  type={showPassword ? 'text' : 'password'}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#002d72] focus:border-transparent outline-none transition-all"
+                  placeholder="Confirm new password"
+                  required
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="w-full text-sm text-gray-500 hover:text-gray-700"
+              >
+                {showPassword ? 'Hide password' : 'Show password'}
+              </button>
+
+              {error && (
+                <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-lg text-red-600 text-sm">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {info && (
+                <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-100 rounded-lg text-blue-700 text-sm">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="16" x2="12" y2="12" />
+                    <line x1="12" y1="8" x2="12.01" y2="8" />
+                  </svg>
+                  <span>{info}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full py-3 bg-[#002d72] hover:bg-[#001f4d] text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isLoading ? (
+                  <>
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    Resetting password...
+                  </>
+                ) : (
+                  'Reset Password'
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={goToSignIn}
+                className="w-full text-sm text-[#002d72] hover:text-[#001f4d] font-medium"
+              >
+                Back to sign in
               </button>
             </form>
           )}

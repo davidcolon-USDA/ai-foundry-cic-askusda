@@ -95,3 +95,7 @@ These items document deviations from the original code in the most recent commit
 5. Added Knowledge Base retrieval fallback when rerank model identifier is invalid (`284ab44`).
    - What changed: KB retrieval now retries without reranking when BedrockAgentRuntime returns model-identifier validation errors for rerank configuration.
    - Why necessary: BedrockAgentRuntime rerank identifier validation failures were causing full chat request failure; this fallback preserves response availability while still using KB retrieval.
+
+6. Added admin login forgot-password/reset-password flow in frontend auth (`May 2026`).
+   - What changed: Added Cognito `ForgotPassword` and `ConfirmForgotPassword` support in admin auth context and corresponding `/admin` UI states for requesting verification codes and completing resets.
+   - Why necessary: Original admin login UX did not provide a self-service password recovery path, causing operational friction and support overhead for locked-out users.
