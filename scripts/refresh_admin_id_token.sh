@@ -15,17 +15,19 @@ Optional:
   --stack-name <name>            default: AskUSDA-Backend
   --region <aws_region>          default: AWS_REGION/AWS_DEFAULT_REGION/IMDS/us-east-1
   --client-id <cognito_client_id>
+  --client-secret <value>        optional Cognito app client secret
   --user-pool-id <cognito_user_pool_id>
   --auth-flow <flow>             default: auto
                                  options: auto|user|admin
   --secret-name <name>           default: ADMIN_DEBUG_ID_TOKEN
+  --debug                        print Cognito auth diagnostics
 
 Examples:
-  ./scripts/refresh_admin_debug_id_token.sh \
+  ./scripts/refresh_admin_id_token.sh \
     --username admin@example.com \
     --repo davidcolon-USDA/ai-foundry-cic-askusda
 
-  ./scripts/refresh_admin_debug_id_token.sh \
+  ./scripts/refresh_admin_id_token.sh \
     --username admin@example.com \
     --password 'YourPasswordHere' \
     --repo davidcolon-USDA/ai-foundry-cic-askusda \
@@ -38,6 +40,16 @@ require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1" >&2
     exit 1
+  fi
+}
+
+json_extract() {
+  local json="$1"
+  local key="$2"
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$json" | jq -r "$key // empty"
+  else
+    printf '%s' "$json" | sed -n "s/.*\"${key#*.}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n1
   fi
 }
 
@@ -94,34 +106,135 @@ stack_output() {
   printf '%s' "$value"
 }
 
-generate_id_token_user_flow() {
-  local client_id="$1"
-  local username="$2"
-  local password="$3"
+describe_user_pool_client_secret() {
+  local region="$1"
+  local user_pool_id="$2"
+  local client_id="$3"
 
-  aws cognito-idp initiate-auth \
-    --auth-flow USER_PASSWORD_AUTH \
+  aws cognito-idp describe-user-pool-client \
+    --region "$region" \
+    --user-pool-id "$user_pool_id" \
     --client-id "$client_id" \
-    --auth-parameters "USERNAME=${username},PASSWORD=${password}" \
-    --query 'AuthenticationResult.IdToken' \
+    --query 'UserPoolClient.ClientSecret' \
     --output text 2>/dev/null || true
 }
 
-generate_id_token_admin_flow() {
+build_secret_hash() {
+  local username="$1"
+  local client_id="$2"
+  local client_secret="$3"
+
+  printf '%s' "${username}${client_id}" \
+    | openssl dgst -sha256 -hmac "$client_secret" -binary \
+    | openssl enc -base64
+}
+
+AUTH_DIAGNOSTIC=""
+AUTH_RESULT_TOKEN=""
+
+call_cognito_user_flow() {
+  local client_id="$1"
+  local username="$2"
+  local password="$3"
+  local secret_hash="$4"
+  local region="$5"
+
+  local output status
+  set +e
+  if [ -n "$secret_hash" ]; then
+    output="$(aws cognito-idp initiate-auth \
+      --region "$region" \
+      --auth-flow USER_PASSWORD_AUTH \
+      --client-id "$client_id" \
+      --auth-parameters "USERNAME=${username},PASSWORD=${password},SECRET_HASH=${secret_hash}" \
+      --output json 2>&1)"
+  else
+    output="$(aws cognito-idp initiate-auth \
+      --region "$region" \
+      --auth-flow USER_PASSWORD_AUTH \
+      --client-id "$client_id" \
+      --auth-parameters "USERNAME=${username},PASSWORD=${password}" \
+      --output json 2>&1)"
+  fi
+  status=$?
+  set -e
+
+  if [ $status -ne 0 ]; then
+    AUTH_DIAGNOSTIC="USER_PASSWORD_AUTH failed: ${output}"
+    AUTH_RESULT_TOKEN=""
+    return 0
+  fi
+
+  local token challenge
+  token="$(printf '%s' "$output" | sed -n 's/.*"IdToken"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  challenge="$(printf '%s' "$output" | sed -n 's/.*"ChallengeName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+
+  if [ -n "$token" ]; then
+    AUTH_DIAGNOSTIC="USER_PASSWORD_AUTH succeeded."
+    AUTH_RESULT_TOKEN="$token"
+    return 0
+  fi
+
+  if [ -n "$challenge" ]; then
+    AUTH_DIAGNOSTIC="USER_PASSWORD_AUTH returned challenge: ${challenge}."
+  else
+    AUTH_DIAGNOSTIC="USER_PASSWORD_AUTH returned no IdToken and no challenge. Raw: ${output}"
+  fi
+  AUTH_RESULT_TOKEN=""
+}
+
+call_cognito_admin_flow() {
   local user_pool_id="$1"
   local client_id="$2"
   local username="$3"
   local password="$4"
   local region="$5"
+  local secret_hash="$6"
 
-  aws cognito-idp admin-initiate-auth \
-    --region "$region" \
-    --user-pool-id "$user_pool_id" \
-    --client-id "$client_id" \
-    --auth-flow ADMIN_USER_PASSWORD_AUTH \
-    --auth-parameters "USERNAME=${username},PASSWORD=${password}" \
-    --query 'AuthenticationResult.IdToken' \
-    --output text 2>/dev/null || true
+  local output status
+  set +e
+  if [ -n "$secret_hash" ]; then
+    output="$(aws cognito-idp admin-initiate-auth \
+      --region "$region" \
+      --user-pool-id "$user_pool_id" \
+      --client-id "$client_id" \
+      --auth-flow ADMIN_USER_PASSWORD_AUTH \
+      --auth-parameters "USERNAME=${username},PASSWORD=${password},SECRET_HASH=${secret_hash}" \
+      --output json 2>&1)"
+  else
+    output="$(aws cognito-idp admin-initiate-auth \
+      --region "$region" \
+      --user-pool-id "$user_pool_id" \
+      --client-id "$client_id" \
+      --auth-flow ADMIN_USER_PASSWORD_AUTH \
+      --auth-parameters "USERNAME=${username},PASSWORD=${password}" \
+      --output json 2>&1)"
+  fi
+  status=$?
+  set -e
+
+  if [ $status -ne 0 ]; then
+    AUTH_DIAGNOSTIC="ADMIN_USER_PASSWORD_AUTH failed: ${output}"
+    AUTH_RESULT_TOKEN=""
+    return 0
+  fi
+
+  local token challenge
+  token="$(printf '%s' "$output" | sed -n 's/.*"IdToken"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  challenge="$(printf '%s' "$output" | sed -n 's/.*"ChallengeName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+
+  if [ -n "$token" ]; then
+    AUTH_DIAGNOSTIC="ADMIN_USER_PASSWORD_AUTH succeeded."
+    AUTH_RESULT_TOKEN="$token"
+    return 0
+  fi
+
+  if [ -n "$challenge" ]; then
+    AUTH_DIAGNOSTIC="ADMIN_USER_PASSWORD_AUTH returned challenge: ${challenge}."
+  else
+    AUTH_DIAGNOSTIC="ADMIN_USER_PASSWORD_AUTH returned no IdToken and no challenge. Raw: ${output}"
+  fi
+  AUTH_RESULT_TOKEN=""
 }
 
 USERNAME=""
@@ -131,9 +244,11 @@ GITHUB_PAT="${GITHUB_PAT:-}"
 STACK_NAME="AskUSDA-Backend"
 REGION=""
 CLIENT_ID=""
+CLIENT_SECRET=""
 USER_POOL_ID=""
 AUTH_FLOW="auto"
 SECRET_NAME="ADMIN_DEBUG_ID_TOKEN"
+DEBUG="false"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -165,6 +280,10 @@ while [ $# -gt 0 ]; do
       CLIENT_ID="${2:-}"
       shift 2
       ;;
+    --client-secret)
+      CLIENT_SECRET="${2:-}"
+      shift 2
+      ;;
     --user-pool-id)
       USER_POOL_ID="${2:-}"
       shift 2
@@ -176,6 +295,10 @@ while [ $# -gt 0 ]; do
     --secret-name)
       SECRET_NAME="${2:-}"
       shift 2
+      ;;
+    --debug)
+      DEBUG="true"
+      shift
       ;;
     -h|--help)
       usage
@@ -192,6 +315,7 @@ done
 require_cmd aws
 require_cmd gh
 require_cmd curl
+require_cmd openssl
 
 if [ -z "$USERNAME" ]; then
   echo "Missing required --username" >&2
@@ -244,32 +368,50 @@ if [ -z "$USER_POOL_ID" ]; then
   USER_POOL_ID="$(stack_output "$STACK_NAME" "$REGION" "AdminUserPoolId")"
 fi
 
+if [ -z "$CLIENT_SECRET" ] && [ -n "$USER_POOL_ID" ] && [ -n "$CLIENT_ID" ]; then
+  CLIENT_SECRET="$(describe_user_pool_client_secret "$REGION" "$USER_POOL_ID" "$CLIENT_ID")"
+  if [ "$CLIENT_SECRET" = "None" ]; then
+    CLIENT_SECRET=""
+  fi
+fi
+
 if [ -z "$CLIENT_ID" ]; then
   echo "Failed to resolve Cognito client ID. Pass --client-id or verify stack outputs." >&2
   exit 1
 fi
 
 ID_TOKEN=""
+SECRET_HASH=""
+if [ -n "$CLIENT_SECRET" ]; then
+  SECRET_HASH="$(build_secret_hash "$USERNAME" "$CLIENT_ID" "$CLIENT_SECRET")"
+fi
 
 case "$AUTH_FLOW" in
   user)
-    ID_TOKEN="$(generate_id_token_user_flow "$CLIENT_ID" "$USERNAME" "$PASSWORD")"
+    call_cognito_user_flow "$CLIENT_ID" "$USERNAME" "$PASSWORD" "$SECRET_HASH" "$REGION"
+    ID_TOKEN="$AUTH_RESULT_TOKEN"
     ;;
   admin)
     if [ -z "$USER_POOL_ID" ]; then
       echo "--auth-flow admin requires user pool ID. Pass --user-pool-id or ensure stack output exists." >&2
       exit 1
     fi
-    ID_TOKEN="$(generate_id_token_admin_flow "$USER_POOL_ID" "$CLIENT_ID" "$USERNAME" "$PASSWORD" "$REGION")"
+    call_cognito_admin_flow "$USER_POOL_ID" "$CLIENT_ID" "$USERNAME" "$PASSWORD" "$REGION" "$SECRET_HASH"
+    ID_TOKEN="$AUTH_RESULT_TOKEN"
     ;;
   auto)
-    ID_TOKEN="$(generate_id_token_user_flow "$CLIENT_ID" "$USERNAME" "$PASSWORD")"
+    call_cognito_user_flow "$CLIENT_ID" "$USERNAME" "$PASSWORD" "$SECRET_HASH" "$REGION"
+    ID_TOKEN="$AUTH_RESULT_TOKEN"
     if [ -z "$ID_TOKEN" ] || [ "$ID_TOKEN" = "None" ] || [ "$ID_TOKEN" = "null" ]; then
       if [ -z "$USER_POOL_ID" ]; then
         echo "USER_PASSWORD_AUTH did not return a token and user pool ID is unavailable for admin flow fallback." >&2
+        if [ "$DEBUG" = "true" ] && [ -n "$AUTH_DIAGNOSTIC" ]; then
+          echo "Diagnostics: ${AUTH_DIAGNOSTIC}" >&2
+        fi
         exit 1
       fi
-      ID_TOKEN="$(generate_id_token_admin_flow "$USER_POOL_ID" "$CLIENT_ID" "$USERNAME" "$PASSWORD" "$REGION")"
+      call_cognito_admin_flow "$USER_POOL_ID" "$CLIENT_ID" "$USERNAME" "$PASSWORD" "$REGION" "$SECRET_HASH"
+      ID_TOKEN="$AUTH_RESULT_TOKEN"
     fi
     ;;
   *)
@@ -280,6 +422,9 @@ esac
 
 if [ -z "$ID_TOKEN" ] || [ "$ID_TOKEN" = "None" ] || [ "$ID_TOKEN" = "null" ]; then
   echo "Failed to generate IdToken. Verify username/password, app client auth flow, and Cognito settings." >&2
+  if [ "$DEBUG" = "true" ] && [ -n "$AUTH_DIAGNOSTIC" ]; then
+    echo "Diagnostics: ${AUTH_DIAGNOSTIC}" >&2
+  fi
   exit 1
 fi
 

@@ -33,6 +33,7 @@ pnpm-debug.log*
 *.pem
 
 # Temporary and local analysis artifacts
+analysis/
 tmp-admin-diag/
 tmp-admin-diag-2/
 tmp-admin-diag-3/
