@@ -94,6 +94,8 @@ This workspace uses two main GitHub Actions workflows:
    - Deploys the frontend to AWS Amplify using the App ID from the infra workflow.
    - Fails fast if the Amplify App ID is not available.
       - Shares a deploy concurrency group with the infra workflow to avoid CloudFormation `UPDATE_IN_PROGRESS` collisions.
+      - Publishes a static deployment/admin reference page to `s3://askusda-crawler-739275447706-us-east-1/admin/index.html`.
+      - The page includes stack outputs (`AskUSDA-Backend.*` values), Stack ARN, Amplify App ID, and Cognito CLI examples for creating/administering users.
 
 3. **Initial Crawl (`initial-crawl.yml`)**
       - Manual operator workflow for first-time or ad hoc crawl runs.

@@ -26,6 +26,8 @@ jobs:
       CDK_DEFAULT_ACCOUNT: ${{ vars.CDK_DEFAULT_ACCOUNT }}
       CDK_DEFAULT_REGION: ${{ vars.CDK_DEFAULT_REGION }}
       STACK_NAME: ${{ vars.STACK_NAME }}
+      # Additional to original workflow: static admin deployment page publish target.
+      ADMIN_DOCS_BUCKET: askusda-crawler-739275447706-us-east-1
       AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
       AMPLIFY_APP_NAME: ${{ vars.AMPLIFY_APP_NAME }}
       DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
@@ -103,6 +105,15 @@ jobs:
           echo "admin_api_url=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`AdminApiUrl`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
           echo "cognito_user_pool_id=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`AdminUserPoolId`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
           echo "cognito_client_id=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`AdminUserPoolClientId`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+          # Additional to original workflow: outputs used by generated admin info page.
+          echo "conversation_table_name=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`ConversationTableName`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+          echo "crawler_bucket_name=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`CrawlerBucketName`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+          echo "escalation_table_name=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`EscalationTableName`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+          echo "guardrail_id=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`GuardrailId`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+          echo "knowledge_base_id=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`KnowledgeBaseId`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+          echo "s3_data_source_v1_id=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`S3DataSourceV1Id`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+          echo "s3_vector_bucket_arn=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].Outputs[?OutputKey==`S3VectorBucketArn`].OutputValue' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
+          echo "stack_arn=$(aws cloudformation describe-stacks --stack-name ${TARGET_STACK} --query 'Stacks[0].StackId' --output text --region ${AWS_REGION})" >> "$GITHUB_OUTPUT"
 
       - name: Install frontend dependencies
         working-directory: CIC-AskUSDA-main/frontend
@@ -136,3 +147,126 @@ jobs:
           JOB_ID=$(node -e "const d=require('./deployment_response.json'); process.stdout.write(d.jobId)")
           curl -s -X PUT -T CIC-AskUSDA-main/frontend/out/build.zip "${UPLOAD_URL}" > /dev/null
           aws amplify start-deployment --app-id "${AMPLIFY_APP_ID}" --branch-name "${BRANCH}" --job-id "${JOB_ID}" --region "${AWS_REGION}"
+
+      # Additional to original workflow: generate and publish static admin deployment page.
+      - name: Publish admin deployment info page to S3
+        run: |
+          TARGET_STACK="${STACK_NAME:-AskUSDA-Backend}"
+          PAGE_BUCKET="${ADMIN_DOCS_BUCKET}"
+          BRANCH="${DEPLOY_BRANCH:-main}"
+          AMPLIFY_DEFAULT_DOMAIN=$(aws amplify get-app --app-id "${AMPLIFY_APP_ID}" --region "${AWS_REGION}" --query 'app.defaultDomain' --output text)
+          APP_URL="https://${BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
+          ADMIN_URL="${APP_URL}/admin"
+          if [ -z "${PAGE_BUCKET}" ] || [ "${PAGE_BUCKET}" = "None" ]; then
+            PAGE_BUCKET="${{ steps.stack.outputs.crawler_bucket_name }}"
+          fi
+
+          if [ -z "${PAGE_BUCKET}" ] || [ "${PAGE_BUCKET}" = "None" ]; then
+            echo "Unable to determine docs bucket for admin page upload."
+            exit 1
+          fi
+
+          mkdir -p admin
+          cat > admin/index.html <<HTML
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width,initial-scale=1" />
+              <title>AskUSDA Deployment Admin Info</title>
+              <style>
+                body { font-family: Arial, sans-serif; margin: 2rem; color: #1f2937; background: #f8fafc; }
+                .card { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+                h1, h2 { color: #111827; }
+                table { width: 100%; border-collapse: collapse; }
+                th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+                th { width: 35%; color: #374151; }
+                code, pre { font-family: Consolas, Monaco, monospace; }
+                pre { white-space: pre-wrap; background: #0b1020; color: #e5e7eb; padding: 0.75rem; border-radius: 6px; overflow: auto; }
+                a { color: #0b63ce; text-decoration: none; }
+                a:hover { text-decoration: underline; }
+              </style>
+            </head>
+            <body>
+              <h1>AskUSDA Deployment Admin Info</h1>
+              <p>This page is generated during app deployment and published to S3.</p>
+
+              <div class="card">
+                <h2>Deployment Context</h2>
+                <table>
+                  <tr><th>Stack Name</th><td>${TARGET_STACK}</td></tr>
+                  <tr><th>Stack ARN</th><td>${{ steps.stack.outputs.stack_arn }}</td></tr>
+                  <tr><th>AWS Region</th><td>${AWS_REGION}</td></tr>
+                  <tr><th>Amplify App ID</th><td>${AMPLIFY_APP_ID}</td></tr>
+                  <tr><th>Amplify Branch</th><td>${DEPLOY_BRANCH:-main}</td></tr>
+                  <tr><th>Frontend URL</th><td><a href="${APP_URL}">${APP_URL}</a></td></tr>
+                  <tr><th>Admin Login URL</th><td><a href="${ADMIN_URL}">${ADMIN_URL}</a></td></tr>
+                  <tr><th>Published Bucket</th><td>${PAGE_BUCKET}</td></tr>
+                  <tr><th>Published Key</th><td>admin/index.html</td></tr>
+                </table>
+              </div>
+
+              <div class="card">
+                <h2>AskUSDA-Backend Outputs</h2>
+                <table>
+                  <tr><th>AskUSDA-Backend.AdminApiUrl</th><td>${{ steps.stack.outputs.admin_api_url }}</td></tr>
+                  <tr><th>AskUSDA-Backend.AdminUserPoolClientId</th><td>${{ steps.stack.outputs.cognito_client_id }}</td></tr>
+                  <tr><th>AskUSDA-Backend.AdminUserPoolId</th><td>${{ steps.stack.outputs.cognito_user_pool_id }}</td></tr>
+                  <tr><th>AskUSDA-Backend.ConversationTableName</th><td>${{ steps.stack.outputs.conversation_table_name }}</td></tr>
+                  <tr><th>AskUSDA-Backend.CrawlerBucketName</th><td>${{ steps.stack.outputs.crawler_bucket_name }}</td></tr>
+                  <tr><th>AskUSDA-Backend.EscalationTableName</th><td>${{ steps.stack.outputs.escalation_table_name }}</td></tr>
+                  <tr><th>AskUSDA-Backend.GuardrailId</th><td>${{ steps.stack.outputs.guardrail_id }}</td></tr>
+                  <tr><th>AskUSDA-Backend.KnowledgeBaseId</th><td>${{ steps.stack.outputs.knowledge_base_id }}</td></tr>
+                  <tr><th>AskUSDA-Backend.S3DataSourceV1Id</th><td>${{ steps.stack.outputs.s3_data_source_v1_id }}</td></tr>
+                  <tr><th>AskUSDA-Backend.S3VectorBucketArn</th><td>${{ steps.stack.outputs.s3_vector_bucket_arn }}</td></tr>
+                  <tr><th>AskUSDA-Backend.WebSocketUrl</th><td>${{ steps.stack.outputs.websocket_url }}</td></tr>
+                </table>
+              </div>
+
+              <div class="card">
+                <h2>Cognito CLI Commands (Add Admin Users)</h2>
+                <pre>aws cognito-idp admin-create-user \
+  --user-pool-id ${{ steps.stack.outputs.cognito_user_pool_id }} \
+  --username admin@example.com \
+  --user-attributes Name=email,Value=admin@example.com Name=email_verified,Value=true \
+  --temporary-password 'TempPass123!' \
+  --message-action SUPPRESS \
+  --region ${AWS_REGION}
+
+aws cognito-idp admin-set-user-password \
+  --user-pool-id ${{ steps.stack.outputs.cognito_user_pool_id }} \
+  --username admin@example.com \
+  --password 'ChangeMe123!' \
+  --permanent \
+  --region ${AWS_REGION}
+
+# Optional: only if your Cognito pool uses this group
+aws cognito-idp admin-add-user-to-group \
+  --user-pool-id ${{ steps.stack.outputs.cognito_user_pool_id }} \
+  --username admin@example.com \
+  --group-name admins \
+  --region ${AWS_REGION}</pre>
+                <p><strong>App client ID:</strong> ${{ steps.stack.outputs.cognito_client_id }}</p>
+              </div>
+            </body>
+          </html>
+          HTML
+
+          aws s3 cp admin/index.html "s3://${PAGE_BUCKET}/admin/index.html" --region "${AWS_REGION}" --content-type "text/html"
+          echo "Admin deployment page uploaded to s3://${PAGE_BUCKET}/admin/index.html"
+
+      # Additional to original workflow: include admin page location in Actions summary.
+      - name: Add deployment summary with admin page location
+        run: |
+          PAGE_BUCKET="${ADMIN_DOCS_BUCKET}"
+          if [ -z "${PAGE_BUCKET}" ] || [ "${PAGE_BUCKET}" = "None" ]; then
+            PAGE_BUCKET="${{ steps.stack.outputs.crawler_bucket_name }}"
+          fi
+
+          {
+            echo "## Admin Deployment Page"
+            echo ""
+            echo "- S3 URI: s3://${PAGE_BUCKET}/admin/index.html"
+            echo "- Stack ARN: ${{ steps.stack.outputs.stack_arn }}"
+            echo "- Amplify App ID: ${AMPLIFY_APP_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"
